@@ -49,8 +49,8 @@ if __name__ == "__main__":
             "timestep": 0.5,      # (ase time unit fs?)
             "temperature": 360.0, # in Kelvin
             "steps": 20,
-            "min_steps": 10,
-            "interval": 10,
+            "min_steps": 20,
+            "interval": 20,
         },
     }
     if os.path.exists(args.input):

@@ -559,6 +559,7 @@ class NeFFCalculator(Calculator):
                 f.write(f"{self._results['work0']:12.6e} ")
                 f.write(" ".join(f"{np.sum(ithwork):12.6e}" for ithwork in self._results['work']))
                 f.write("\n")
+                f.close()
 
             if 'energy' in self._results:
                 self._prev_Energy_analysis = self._results['energy']
@@ -617,6 +618,7 @@ class NeFFCalculator(Calculator):
                 with open(self._bond_record_file, 'a') as f:
                     f.write(f"{report}")
                     f.write("\n")
+                    f.close()
 
         with Timing("clean temp dir"):
             try:

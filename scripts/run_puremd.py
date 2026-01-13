@@ -49,7 +49,7 @@ if __name__ == "__main__":
             "temperature": 360.0, # in Kelvin
             "steps": 10000,
             "min_steps": 20,
-            "interval": 10,
+            "interval": 20,
         },
     }
     if os.path.exists(args.input): config.update(toml.load(args.input))

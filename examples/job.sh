@@ -2,8 +2,8 @@
 
 # 1. 定义变量
 jobflag=$1  			# 任务标识，读取第一个参数
-jobnum=50  				# 任务总数，可根据实际需求修改
-ncore=1  				# 指定并发进程数，限制同时运行的任务数
+jobnum=20  				# 任务总数，可根据实际需求修改
+ncore=4  				# 指定并发进程数，限制同时运行的任务数
 export OMP_THREAD_NUM=4 # ncore*OMP_THERAD_NUM不超过机器的总核数 
 
 # 2. 判断文件夹 & 数据状态
@@ -35,7 +35,7 @@ for ((i=1; i<=$jobnum; i++)); do
     echo "启动任务 id=${i}，运行目录=${idir}，当前并发进程数=${process_count}"
     
     # 核心：nohup后台运行python脚本，重定向日志，&放入后台
-    nohup python ../scripts/run_reaxff.py -f ${jobflag}_${i} > "${idir}/task_${i}.log" 2>&1 &
+    nohup python ../scripts/run_reaxff.py -f $idir > "${idir}/task_${i}.log" 2>&1 &
     # nohup sleep 1 && echo "xxxx" 2>&1 & # for test
     
     # 5. 并发控制：计数器+1，判断是否达到最大并发数
