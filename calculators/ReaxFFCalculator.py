@@ -46,7 +46,7 @@ class ReaxFFCalculator_LAMMPS(LAMMPS):
         )
 
     def calculate(self, atoms, properties, system_changes):
-        with Timing(f"reax calc (dir={self.tmp_dir})"):
+        with Timing(f"reax calculate"):
             super().calculate(atoms, properties, system_changes)
 
             self._result['energy'] = self.results['energy']

@@ -300,43 +300,40 @@ class NeFFCalculator(Calculator):
     def update_restraint_topology(self, refered_temperature_K = 300):    
         box = np.diag(self._eqcalc.atoms.get_cell())
         xyz = self._eqcalc.atoms.get_positions()
-        posI = xyz[self._bond_Iinfo[0]].copy()
-        posJ = xyz[self._bond_Jinfo[0]].copy()
 
-        dr = displacement(posI, posJ, box)
-        r_safe = safe_norm(dr, axis=1)
+        posI_sp = xyz[self._bond_Iinfo[0]][self._bond_special_indice].copy()
+        posJ_sp = xyz[self._bond_Jinfo[0]][self._bond_special_indice].copy()
+    
+        dr_sp = displacement(posI_sp, posJ_sp, box)
+        r_safe_sp = safe_norm(dr_sp, axis=1)
 
         D_MAX = 9999
-        rc = 0.5 * (posI + posJ)
-        dd = displacement(rc[:,None,:], rc[None,:,:], box)
-        dist_rc = safe_norm(dd, axis=2)
-        dist_rc_screen = np.ones_like(dist_rc) * D_MAX
-        
+        rc_sp = 0.5 * (posI_sp + posJ_sp)
+        dd_sp = displacement(rc_sp[:,None,:], rc_sp[None,:,:], box)
+
+        dist_rc_sp = safe_norm(dd_sp, axis=2)
+        dist_rc_sp_screen = np.ones_like(dist_rc_sp) * D_MAX
+    
+        bondtype_sp = self._bond_type[self._bond_special_indice]
+        reacted_sp = self._bond_special_reacted[self._bond_special_indice]
+
         # move unreactive sites & reacted sites (only react onece!!!)
-        special_index_i = np.where( (self._bond_type == self._bond_special_type[0]) & 
-                (self._bond_special_indicator == 1) & (self._bond_special_reacted == 0))[0]
-        special_index_j = np.where( (self._bond_type == self._bond_special_type[1]) &
-                (self._bond_special_indicator == 1) & (self._bond_special_reacted == 0))[0]
-        dist_rc_screen[np.ix_(special_index_i, special_index_j)] = dist_rc[np.ix_(special_index_i, special_index_j)]
-        
-        # print(dist_rc_screen)
-
-        i, j = np.unravel_index(np.argmin(dist_rc_screen), dist_rc_screen.shape)
-        minrc = dist_rc_screen[i, j]
-        # print(f'i={i} list = {self._bond_special_indice}')
-        # print(f'j={j} list = {self._bond_special_indice}')
-
-        # print(f'COMP1: {np.shape(dist_rc_screen)}')
-        # print(f'COMPI: {len(self._bond_Iinfo[0])}')
-        # print(f'COMPJ: {len(self._bond_Jinfo[0])}')
+        special_index_i = np.where( (bondtype_sp == self._bond_special_type[0]) & (reacted_sp == 0))[0]
+        special_index_j = np.where( (bondtype_sp == self._bond_special_type[1]) & (reacted_sp == 0))[0]
+        dist_rc_sp_screen[np.ix_(special_index_i, special_index_j)] = dist_rc_sp[np.ix_(special_index_i, special_index_j)]
+    
+        spi, spj = np.unravel_index(np.argmin(dist_rc_sp_screen), dist_rc_sp_screen.shape)
+        minrc = dist_rc_sp_screen[spi, spj]
+        i = self._bond_special_indice[spi]
+        j = self._bond_special_indice[spj]
 
         print(f'min rc bond length = {minrc}')
         # print(dist_rc_screen)
         print(f'ith bond information: {i}, {self._bond_Iinfo[0][i]} - {self._bond_Jinfo[0][i]} {self._bond_Iinfo[2][i]}-{self._bond_Jinfo[2][i]}')
         print(f'jth bond information: {j}, {self._bond_Iinfo[0][j]} - {self._bond_Jinfo[0][j]} {self._bond_Iinfo[2][j]}-{self._bond_Jinfo[2][j]}')
-        
-        energy_old = (0.5 * self._bond_k[i] * (r_safe[i]-self._bond_r0[i])**2  # use _bond_k other than _bond_k0
-                    + 0.5 * self._bond_k[j] * (r_safe[j]-self._bond_r0[j])**2)
+    
+        energy_old = (0.5 * self._bond_k[i] * (r_safe_sp[spi]-self._bond_r0[i])**2  # use _bond_k other than _bond_k0
+                    + 0.5 * self._bond_k[j] * (r_safe_sp[spj]-self._bond_r0[j])**2)
 
         # after exchange energy Change I-Atom only (make sure all I atoms are O element)
         new_dri = displacement(xyz[self._bond_Iinfo[0][j]], xyz[self._bond_Jinfo[0][i]], box)
@@ -350,7 +347,7 @@ class NeFFCalculator(Calculator):
         beta_ev_inv = 1.0 / refered_energy_ev
 
         rand_num = np.random.rand()
-        print(f'random number = {rand_num} vs exp(-(energy_new - energy_old) * beta_ev_inv) = {np.exp(-(energy_new - energy_old) * beta_ev_inv)}')
+        print(f'random number = {rand_num} vs exp(-deltaE * beta) = {np.exp(-(energy_new - energy_old) * beta_ev_inv)}')
         if minrc < 2.0 and (energy_new < energy_old or rand_num < np.exp(-(energy_new - energy_old) * beta_ev_inv)):
             print('Exchange Iatom & And keep J-Atom index for bond i and bond j')
             
@@ -488,17 +485,15 @@ class NeFFCalculator(Calculator):
             k1 = (0.5 * np.abs(self._qt) + 0.01) / (qmax + 0.1) # for unreactive sites (strong interaction)
             k1max = (0.5 * qmax + 0.0001) / (qmax + 0.1)
             k1min = (0.5 * 0.00 + 0.0001) / (qmax + 0.1)
-
-            yk = (self._time - 0.5*(t0 + tend)) / (0.5*(tend - t0))
-            yk = np.clip(yk, -0.995, 0.995)
-            k2 = 0.25 * np.sqrt(1 - yk**2)        # for reactive sites (weak interaction)
+            k2 = 0.25       # for reactive sites (weak interaction)
 
             self._bond_k = self._bond_k0 * k1
             special_index = np.where(self._bond_special_indicator==1)[0]
             self._bond_k[special_index] = self._bond_k0[special_index] * k2
 
             ## 3. update topology for current reactive & unreactive sites
-            if k1 > 0.30 * k1max:
+            # if k1 > 0.50 * k1max:
+            with Timing("neff update restraint topology"):
                 self.update_restraint_topology(iterator.temperature_K)
 
             neq_energy = 0.0
