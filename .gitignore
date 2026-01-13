@@ -1,0 +1,10 @@
+__pycache__
+*.xyz
+*.traj
+*.so
+*.a
+*.dynlib
+*.log
+tmp_*
+local_test*
+
