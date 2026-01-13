@@ -1,0 +1,8 @@
+README.md
+pyproject.toml
+setup.cfg
+src/ASE_TED.egg-info/PKG-INFO
+src/ASE_TED.egg-info/SOURCES.txt
+src/ASE_TED.egg-info/dependency_links.txt
+src/ASE_TED.egg-info/requires.txt
+src/ASE_TED.egg-info/top_level.txt

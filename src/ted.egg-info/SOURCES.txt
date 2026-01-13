@@ -1,0 +1,10 @@
+README.md
+pyproject.toml
+setup.cfg
+setup.py
+src/ted/__init__.py
+src/ted.egg-info/PKG-INFO
+src/ted.egg-info/SOURCES.txt
+src/ted.egg-info/dependency_links.txt
+src/ted.egg-info/requires.txt
+src/ted.egg-info/top_level.txt

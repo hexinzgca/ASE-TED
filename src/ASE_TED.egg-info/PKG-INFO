@@ -1,3 +1,22 @@
+Metadata-Version: 2.4
+Name: ASE-TED
+Version: 0.1.0
+Summary: Topological Enhenced Dynamics
+Home-page: https://github.com/hexinzgca/ASE-TED
+Author: Xin He
+Author-email: hexin@bjzgca.com
+License: MIT
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: ase>=3.20.0
+Requires-Dist: numpy>=1.20
+
 # ASE-TED: Topological Enhenced Dynamics
 
 ## Project Overview
@@ -26,33 +45,15 @@ The project integrates multiple high-performance dynamics engines—PuReMD, LAMM
 4. **Free Energy Calculation with Free Energy Perturbation (FEP) and Non Equilibrium Processes (NEP)**
    - Integrate the Free Energy Perturbation method to accurately calculate the free energy barrier and thermodynamic parameters of liquid-phase reactions by perturbing the system between different topological states.
 
-## Directory Structure
+## Optimized Directory Structure
 
 ```
 ASE-TED
+├── calculators
+├── examples
+├── integrators
 ├── README.md
-├── examples # copy this fold for a new test
-│   ├── README.md
-│   ├── collect.sh
-│   ├── job.sh
-│   ├── puremd_small1
-│   ├── reaxff_small1
-│   ├── reaxff_system1
-│   ├── small1
-│   └── system1
-├── pyproject.toml
-├── requirements.txt
-├── scripts
-│   ├── run_mmmm.py
-│   ├── run_puremd.py
-│   └── run_reaxff.py
-├── setup.cfg
-├── setup.py
-└── src
-    └── ted # the source code of topological enhanced dynamics
-        ├── __init__.py
-        ├── calculators
-        └── integrators
+└── scripts
 ```
 
 ## Environment Setup
@@ -60,7 +61,7 @@ ASE-TED
 ### Dependency List
 
 1. Base Environment: Python 3.8+
-2. Core Simulation Libraries: `ase`, `openmm`(TODO), `lammps`, `puremd` (install from source)
+2. Core Simulation Libraries: `ase`, `openmm`, `lammps`, `puremd` (install from source)
 
 ### Installation Steps
 
@@ -72,13 +73,12 @@ ASE-TED
 2. Install Python base dependencies
    ```bash
    pip install -r requirements.txt
-   pip install -e .
    ```
 3. Configure environment variables
-   - Add LAMMPS and PuReMD installation paths to `PATH` or to set `ASE_LAMMPSRUN_COMMAND` and `ASE_PureMD_COMMAND`
+   - Add OpenMM and PuReMD installation paths to `PATH` and `PYTHONPATH`
 4. Test the ASE-TED
    ```bash
-   cp -r examples local_test && cd local_test
+   cd examples
    python ../scripts/run_reaxff.py -f reaxff_small1
    ```
 

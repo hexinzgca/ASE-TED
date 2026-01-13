@@ -1,21 +1,27 @@
+import os, sys
 import numpy as np
-import argparse
 from ase import units, Atoms
 from ase.io import write
 from ase.io.trajectory import Trajectory
 from ase.optimize import FIRE
 from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
-from calculators.ReaxFFCalculator import ReaxFFCalculator_LAMMPS
-from calculators.OPLSAACalculator import OPLSAACalculator_LAMMPS
-from calculators.partitioned_calc import PartitionedCalculator
-from calculators.neff_calc import NeFFCalculator
-from integrators.langevin_nvt import LangevinBAOAB
-
-from calculators.lammps_utils import parse_lammps_data_to_ase_atoms, load_lammps_data_0, update_lammps_data
-from calculators.decorator_utils import Timing
 from loguru import logger
-import os
+import argparse
 import toml
+
+current_script_path = os.path.abspath(__file__)
+current_script_dir = os.path.dirname(current_script_path)
+parent_dir = os.path.dirname(current_script_dir)
+sys.path.append(os.path.join(parent_dir, 'src'))
+
+from ted.calculators.ReaxFFCalculator import ReaxFFCalculator_LAMMPS
+from ted.calculators.OPLSAACalculator import OPLSAACalculator_LAMMPS
+from ted.calculators.partitioned_calc import PartitionedCalculator
+from ted.calculators.neff_calc import NeFFCalculator
+from ted.integrators.langevin_nvt import LangevinBAOAB
+from ted.calculators.lammps_utils import parse_lammps_data_to_ase_atoms, load_lammps_data_0, update_lammps_data
+from ted.calculators.decorator_utils import Timing
+
 
 parser = argparse.ArgumentParser(description="Non Equilibrium - Partitioned Region Dynamics (ReaxFF/MatterSim):MM Simulation")
 parser.add_argument("--solver", "-s", type=str, nargs="+", default=["ReaxFF", "OPLSAA"], 
