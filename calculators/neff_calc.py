@@ -77,7 +77,7 @@ def dynamics_coulomb4b_potential(pos: np.ndarray, box: np.ndarray = None, t: flo
     assert len(pos) == 4, 'pos should be a list of four arrays, each with shape (n, 3)'
     assert len(args) == 1, 'args should be a list of one array, each with shape (1,)'
     posA, posB, posC, posD = pos
-    qref = np.clip(args[0], min=0)
+    qref = args[0] if args[0] >=0 else 0
     
     # Initialize energy and force array
     V_energy = 0.0
@@ -483,18 +483,18 @@ class NeFFCalculator(Calculator):
                 
             ## 2. update k for restraint potential for both unreactive & reactive sites
             k1 = (0.5 * np.abs(self._qt) + 0.01) / (qmax + 0.1) # for unreactive sites (strong interaction)
-            k1max = (0.5 * qmax + 0.0001) / (qmax + 0.1)
-            k1min = (0.5 * 0.00 + 0.0001) / (qmax + 0.1)
-            k2 = 0.25       # for reactive sites (weak interaction)
+            k1max = (0.5 * qmax + 0.01) / (qmax + 0.1)
+            k1min = (0.5 * 0.00 + 0.01) / (qmax + 0.1)
+            k2 = 1.0 if self._time > tend else np.maximum(np.exp(-4*(tend - self._time)/(tend - t0)), 0.1)  # for reactive sites (weak interaction)
 
             self._bond_k = self._bond_k0 * k1
             special_index = np.where(self._bond_special_indicator==1)[0]
             self._bond_k[special_index] = self._bond_k0[special_index] * k2
 
             ## 3. update topology for current reactive & unreactive sites
-            # if k1 > 0.50 * k1max:
-            with Timing("neff update restraint topology"):
-                self.update_restraint_topology(iterator.temperature_K)
+            if k1 > 0.25 * k1max:
+                with Timing("neff update restraint topology"):
+                    self.update_restraint_topology(iterator.temperature_K)
 
             neq_energy = 0.0
             with Timing("neff calculate potentials again"):
