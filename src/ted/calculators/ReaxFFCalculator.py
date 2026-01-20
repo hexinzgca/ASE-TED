@@ -19,7 +19,7 @@ class ReaxFFCalculator_LAMMPS(LAMMPS):
             'boundary': 'p p p',
             'atom_style': 'full',  # 支持拓扑，与你的ff文件匹配
             'pair_style': 'reaxff NULL',  # 直接将LAMMPS的pair_style值作为字符串传入
-            'pair_coeff': [f'* * {ff_file} C H O\nfix charge all qeq/reax 1 0.0 10.0 1.0e-6 reaxff'],  # 若ff文件在当前目录，直接用文件名；否则用绝对路径
+            'pair_coeff': [f'* * {ff_file} C H O\nfix charge all qeq/reax 1 0.0 10.0 1.0e-6 reaxff\nnewton on'],  # 若ff文件在当前目录，直接用文件名；否则用绝对路径
             # 'fix': ['charge all qeq/reax 1 0.0 10.0 1.0e-6 reaxff'],
             # 读取data文件（拓扑+原子坐标+原子类型）
             # 'read_data': data_file,

@@ -239,7 +239,12 @@ class NeFFCalculator(Calculator):
         self._qt = 0.0
         self._bond_k = np.zeros_like(self._bond_k0)
         
-        self._results = {'work0': None, 'work': None, 'work_step': None, 'neq_energy': None, 'neq_forces': None}
+        self._results = {
+            'sumdE': None, 
+            'sumdE_coul': None, 
+            'sumdE_bond': None, 
+            'sumdE_topo': None, 
+            'work': None, 'work_step': None, 'neq_energy': None, 'neq_forces': None}
 
         # print(f"ExertList: len {len(self._exertList)}\n{self._exertList}")
         super().__init__()
@@ -465,11 +470,19 @@ class NeFFCalculator(Calculator):
             texp = float(texp) * units.fs
             qmax = float(qmax)
             tT = (tend - t0) / int(nhperiod) # suggest nhperiod = 4
-            
-            # work0 is cause by change of status parameters (like qt and bond_k)
-            if self._results['work0'] is None: self._results['work0'] = 0.0
+
+            # sumdE is cause by change of status parameters (like qt and bond_k)
+            if self._results['sumdE'] is None: 
+                self._results['sumdE'] = 0.0
+                self._results['sumdE_coul'] = 0.0
+                self._results['sumdE_bond'] = 0.0
+                self._results['sumdE_topo'] = 0.0
             previous_neq_energy = self._results['reduced_neq_energy']
+            previous_coul_energy = self._results['total_neq_energy'][0]
+            previous_bond_energy = self._results['total_neq_energy'][1]
             update_neq_energy = previous_neq_energy
+            update_coul_energy = previous_coul_energy
+            update_bond_energy = previous_bond_energy
 
             # try to update the status parameters (like qt and bond_k and topology)
             ## 1. update qt for attraction and repulsion intection for reactive sites
@@ -492,9 +505,10 @@ class NeFFCalculator(Calculator):
             self._bond_k[special_index] = self._bond_k0[special_index] * k2
 
             ## 3. update topology for current reactive & unreactive sites
+            topo_energy = 0.0
             if k1 > 0.25 * k1max:
                 with Timing("neff update restraint topology"):
-                    self.update_restraint_topology(iterator.temperature_K)
+                    topo_energy = self.update_restraint_topology(iterator.temperature_K)
 
             neq_energy = 0.0
             with Timing("neff calculate potentials again"):
@@ -507,15 +521,22 @@ class NeFFCalculator(Calculator):
                     if t['type'] == 'coulomb4b':
                         #print('1', t['type'], len(t['lists']))
                         e1, _f1 = func(atoms_pos, box, self._time, self._qt)
+                        update_coul_energy = e1
                     elif t['type'] == 'restraint':
                         #print('2', t['type'], len(t['lists']))
                         e1, _f1 = func(atoms_pos, box, self._time, self._bond_k, self._bond_r0)
+                        update_bond_energy = e1
                     else:
                         raise ValueError(f"unsupported potential type: {t['type']}")
                     neq_energy += e1
+
             update_neq_energy = neq_energy
 
-            self._results['work0'] += (update_neq_energy - previous_neq_energy)
+            self._results['sumdE'] += (update_neq_energy - previous_neq_energy)
+            self._results['sumdE_coul'] += (update_coul_energy - previous_coul_energy)
+            self._results['sumdE_bond'] += (update_bond_energy - previous_bond_energy)
+            self._results['sumdE_topo'] += topo_energy
+
             custom_loggor.print(f"time: {self._time / units.fs:.6f} fs | qt = {self._qt:.6f} | k1 = {k1:.6f} | k2 = {k2:.6f}")
 
         with Timing("neff work analysis"):
@@ -556,7 +577,10 @@ class NeFFCalculator(Calculator):
             with open(self._work_record_file, 'a') as f:
                 f.write(f"{iterator.nsteps:6d} {self._results['energy']} ")
                 f.write(" ".join(f"{ener:12.6e}" for ener in self._results['total_neq_energy']) + " ")
-                f.write(f"{self._results['work0']:12.6e} ")
+                f.write(f"{self._results['sumdE']:12.6e} ")
+                f.write(f"{self._results['sumdE_coul']:12.6e} ")
+                f.write(f"{self._results['sumdE_bond']:12.6e} ")
+                f.write(f"{self._results['sumdE_topo']:12.6e} ")
                 f.write(" ".join(f"{np.sum(ithwork):12.6e}" for ithwork in self._results['work']))
                 f.write("\n")
                 f.close()
@@ -572,13 +596,20 @@ class NeFFCalculator(Calculator):
             for i in range(1):
                 t = self._ne_potentials[0]
                 atoms_pos = [xyz[atom_list] for atom_list in t['lists']]
-                # C    O      O      H
+                # C      O      O      H
                 siteA, siteB, siteC, siteD = atoms_pos[0], atoms_pos[1], atoms_pos[2], atoms_pos[3]
                 custom_loggor.print(f'ABCD: {len(siteA)}, {len(siteB)}, {len(siteC)}, {len(siteD)}')
+                lenA = len(siteA)
                 custom_loggor.print('A index ' + ' '.join([str(k) for k in t['lists'][0]]))
                 custom_loggor.print('B index ' + ' '.join([str(k) for k in t['lists'][1]]))
                 custom_loggor.print('C index ' + ' '.join([str(k) for k in t['lists'][2]]))
                 custom_loggor.print('D index ' + ' '.join([str(k) for k in t['lists'][3]]))
+                custom_loggor.print('VMD index ' 
+                    + ' '.join([str(k) for k in t['lists'][0]])
+                    + ' ' + ' '.join([str(k) for k in t['lists'][1]])
+                    + ' ' + ' '.join([str(k) for k in t['lists'][2][:lenA]])
+                    + ' ' + ' '.join([str(k) for k in t['lists'][3][:lenA]])
+                )
                 
                 self.count_free_0 =  len(siteC) // 2
                 self.count_free_max = (len(siteB) + len(siteC)) // 2
@@ -590,10 +621,10 @@ class NeFFCalculator(Calculator):
                 distAB = np.linalg.norm(dispAB, axis=2)
                 distAC = np.linalg.norm(dispAC, axis=2)
 
-                siteAB_minarg1 = np.argmin(distAB, axis=1)
-                siteAB_minval1 = np.min(distAB, axis=1)
-                siteAC_minarg1 = np.argmin(distAC, axis=1)
-                siteAC_minval1 = np.min(distAC, axis=1)
+                siteAB_minarg1 = np.argmin(distAB, axis=0) # find A-index
+                siteAB_minval1 = np.min(distAB, axis=0)
+                siteAC_minarg1 = np.argmin(distAC, axis=0) # find A-index
+                siteAC_minval1 = np.min(distAC, axis=0)
 
                 linkflagAB = siteAB_minarg1 // (len(siteA) // 4)
                 linkflagAB[np.where(siteAB_minval1 > cutoff)] = -1
@@ -601,8 +632,8 @@ class NeFFCalculator(Calculator):
                 linkflagAC = siteAC_minarg1 // (len(siteA) // 4)
                 linkflagAC[np.where(siteAC_minval1 > cutoff)] = -1
 
-                count_free1 = np.sum((linkflagAB[:len(siteB)] == -1) & (linkflagAC[:len(siteB)] == -1))
-                count_free2 = np.sum((linkflagAB[len(siteB)::2] == -1) & (linkflagAC[len(siteB)+1::2] == -1))
+                count_free1 = np.sum((linkflagAB[:lenA] == -1) & (linkflagAC[:lenA] == -1))
+                count_free2 = np.sum((linkflagAC[lenA::2] == -1) & (linkflagAC[lenA+1::2] == -1))
                 self.count_free = count_free1 + count_free2
 
                 custom_loggor.print(f"free bond count: {count_free1} + {count_free2} = {self.count_free}")
