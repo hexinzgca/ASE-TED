@@ -47,9 +47,9 @@ if __name__ == "__main__":
         "global": {
             "timestep": 0.5,      # (ase time unit fs?)
             "temperature": 360.0, # in Kelvin
-            "steps": 10000,
-            "min_steps": 20,
-            "interval": 20,
+            "steps": 16000,
+            "min_steps": 50,
+            "interval": 50,
         },
     }
     if os.path.exists(args.input): config.update(toml.load(args.input))
@@ -135,10 +135,12 @@ if __name__ == "__main__":
         integrator = LangevinBAOAB(
             atoms=atoms,
             timestep=config["global"]["timestep"] * units.fs,  # fs
+            T_tau = 20 * config["global"]["timestep"] * units.fs,  # fs
             temperature_K=config["global"]["temperature"],  # K
             disable_cell_langevin=True,  # 仅NVT系综，禁用盒子 Langevin
-            rng=np.random.default_rng(seed=42),
+            rng=np.random.default_rng(), # no seed!!!
         )
+        logger.info(f"test random number: {integrator.rng.random()}")
 
         traj_path = f"{flag}/trajectory_sample.xyz"
         if os.path.exists(traj_path): os.remove(traj_path)
