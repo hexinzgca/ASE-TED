@@ -1,11 +1,13 @@
-from ase.calculators.lammpsrun import LAMMPS
+# from ase.calculators.lammpsrun import LAMMPS
+from .lammpsrun_alter2 import LAMMPS
 
 from .lammps_utils import load_lammps_data_0, parse_lammps_data_to_ase_atoms
 from .decorator_utils import Timing
 import numpy as np
 import os
 
-os.environ['ASE_LAMMPSRUN_COMMAND'] = 'lmp'  # 确保lmp在系统PATH中
+if os.environ.get('ASE_LAMMPSRUN_COMMAND') is None:
+    os.environ['ASE_LAMMPSRUN_COMMAND'] = 'mpirun -np 4 /usr/local/lammps/bin/lmp -sf gpu -pk gpu 1'  # 确保lmp在系统PATH中
 
 class ReaxFFCalculator_LAMMPS(LAMMPS):
     def __init__(self, ff_file, tmp_dir='tmp_reax', restrain_bond_topo=''):
