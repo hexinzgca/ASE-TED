@@ -366,8 +366,8 @@ class LAMMPS(Calculator):
         # see to it that LAMMPS is started
         if not self._lmp_alive():
             command = self.get_lammps_command()
-            print(command)
-            command = "mpirun -np 4 /usr/local/lammps/bin/lmp -sf gpu -pk gpu 1"
+            # print(command)
+            # command = "mpirun -np 4 /usr/local/lammps/bin/lmp -sf gpu -pk gpu 1"
 
             # Attempt to (re)start lammps
             self._lmp_handle = subprocess.Popen(

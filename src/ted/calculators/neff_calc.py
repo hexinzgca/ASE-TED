@@ -302,7 +302,7 @@ class NeFFCalculator(Calculator):
         return self._ne_potentials
 
     @debug_helper(enable=True, print_args=False, print_return=False)
-    def update_restraint_topology(self, refered_temperature_K = 300):    
+    def update_restraint_topology(self, refered_temperature_K = 300, custom_loggor = None): 
         box = np.diag(self._eqcalc.atoms.get_cell())
         xyz = self._eqcalc.atoms.get_positions()
 
@@ -332,11 +332,15 @@ class NeFFCalculator(Calculator):
         i = self._bond_special_indice[spi]
         j = self._bond_special_indice[spj]
 
-        print(f'min rc bond length = {minrc}')
-        # print(dist_rc_screen)
-        print(f'ith bond information: {i}, {self._bond_Iinfo[0][i]} - {self._bond_Jinfo[0][i]} {self._bond_Iinfo[2][i]}-{self._bond_Jinfo[2][i]}')
-        print(f'jth bond information: {j}, {self._bond_Iinfo[0][j]} - {self._bond_Jinfo[0][j]} {self._bond_Iinfo[2][j]}-{self._bond_Jinfo[2][j]}')
-    
+        if custom_loggor is not None:
+            custom_loggor.print(f'min rc bond length = {minrc}')
+            custom_loggor.print(f'ith bond information: {i}, {self._bond_Iinfo[0][i]} - {self._bond_Jinfo[0][i]} {self._bond_Iinfo[2][i]}-{self._bond_Jinfo[2][i]}')
+            custom_loggor.print(f'jth bond information: {j}, {self._bond_Iinfo[0][j]} - {self._bond_Jinfo[0][j]} {self._bond_Iinfo[2][j]}-{self._bond_Jinfo[2][j]}')
+        else:
+            print(f'min rc bond length = {minrc}')
+            print(f'ith bond information: {i}, {self._bond_Iinfo[0][i]} - {self._bond_Jinfo[0][i]} {self._bond_Iinfo[2][i]}-{self._bond_Jinfo[2][i]}')
+            print(f'jth bond information: {j}, {self._bond_Iinfo[0][j]} - {self._bond_Jinfo[0][j]} {self._bond_Iinfo[2][j]}-{self._bond_Jinfo[2][j]}')
+        
         energy_old = (0.5 * self._bond_k[i] * (r_safe_sp[spi]-self._bond_r0[i])**2  # use _bond_k other than _bond_k0
                     + 0.5 * self._bond_k[j] * (r_safe_sp[spj]-self._bond_r0[j])**2)
 
@@ -347,31 +351,58 @@ class NeFFCalculator(Calculator):
         new_bj = np.linalg.norm(new_drj)
         energy_new = (0.5 * self._bond_k[i] * (new_bi-self._bond_r0[i])**2  # use _bond_k other than _bond_k0
                     + 0.5 * self._bond_k[j] * (new_bj-self._bond_r0[j])**2)
-
+        
+        if custom_loggor is not None:
+            custom_loggor.print(f'energy old = {energy_old}')
+            custom_loggor.print(f'energy new = {energy_new}')
+        else:
+            print(f'energy old = {energy_old}')
+            print(f'energy new = {energy_new}')
+        
         refered_energy_ev = units.kB * refered_temperature_K
         beta_ev_inv = 1.0 / refered_energy_ev
 
         rand_num = np.random.rand()
-        print(f'random number = {rand_num} vs exp(-deltaE * beta) = {np.exp(-(energy_new - energy_old) * beta_ev_inv)}')
+        
+        if custom_loggor is not None:
+            custom_loggor.print(f'random number = {rand_num} vs exp(-deltaE * beta) = {np.exp(-(energy_new - energy_old) * beta_ev_inv)}')
+        else:
+            print(f'random number = {rand_num} vs exp(-deltaE * beta) = {np.exp(-(energy_new - energy_old) * beta_ev_inv)}')
+        
         if minrc < 2.0 and (energy_new < energy_old or rand_num < np.exp(-(energy_new - energy_old) * beta_ev_inv)):
-            print('Exchange Iatom & And keep J-Atom index for bond i and bond j')
-            
+            self._bond_old = self._bond_Iinfo[0].copy()
+
             self._bond_Iinfo[0][i], self._bond_Iinfo[0][j] = self._bond_Iinfo[0][j], self._bond_Iinfo[0][i]
             self._bond_Iinfo[1][i], self._bond_Iinfo[1][j] = self._bond_Iinfo[1][j], self._bond_Iinfo[1][i]
             assert self._bond_Iinfo[2][i] == 'O' and self._bond_Iinfo[2][j] == 'O'
             self._bond_special_reacted[j] = 1 # label that bond's atom index has been exchanged and make it not back!
 
+            self._bond_new = self._bond_Iinfo[0].copy()
+            if np.all(self._bond_old[i] == self._bond_new[i]):
+                print(f'fails to change')
+
             # update the lists of non-equilibrium potential (save topology)
-            print(self._ne_potentials[-1]['type'])
+            # print(self._ne_potentials[-1]['type'])
             self._ne_potentials[-1]['lists'] = [np.array(self._bond_Iinfo[0]), np.array(self._bond_Jinfo[0])]
-            print('****** Reaction occur! bond i(Iatom) and bond j(Iatom) are exchanged ******')
+            if custom_loggor is not None:
+                custom_loggor.print('****** Reaction occur! bond i(Iatom) and bond j(Iatom) are exchanged ******')
+                custom_loggor.print(f'energy old = {energy_old}')
+                custom_loggor.print(f'energy new = {energy_new}')
+                custom_loggor.print(f'delta energy = {energy_new - energy_old}')
+            else:
+                print('****** Reaction occur! bond i(Iatom) and bond j(Iatom) are exchanged ******')
+                print(f'energy old = {energy_old}')
+                print(f'energy new = {energy_new}')
+                print(f'delta energy = {energy_new - energy_old}')
         else:
-            print('Reject exchange by random')
+            if custom_loggor is not None:
+                custom_loggor.print('Reject exchange by random')
+            else:
+                print('Reject exchange by random')
             energy_new = energy_old
             
         delta_energy = energy_new - energy_old
         return energy_new - energy_old
-
 
     @debug_helper(enable=True, print_args=False, print_return=False)
     def calculate(self, atoms, properties, system_changes):
@@ -495,9 +526,12 @@ class NeFFCalculator(Calculator):
                 self._qt = 0.0
                 
             ## 2. update k for restraint potential for both unreactive & reactive sites
-            k1 = (0.5 * np.abs(self._qt) + 0.01) / (qmax + 0.1) # for unreactive sites (strong interaction)
-            k1max = (0.5 * qmax + 0.01) / (qmax + 0.1)
-            k1min = (0.5 * 0.00 + 0.01) / (qmax + 0.1)
+            k1 = (0.25 * np.abs(self._qt)) / (qmax) # for unreactive sites (strong interaction)
+            if self._time >= t0 and self._time <= tend:
+                k1 = np.maximum(k1, 0.01)
+            k1max = (0.25 * qmax + 0.000) / (qmax)
+            k1min = (0.25 * 0.00 + 0.000) / (qmax)
+
             k2 = 1.0 if self._time > tend else np.maximum(np.exp(-4*(tend - self._time)/(tend - t0)), 0.1)  # for reactive sites (weak interaction)
 
             self._bond_k = self._bond_k0 * k1
@@ -506,9 +540,8 @@ class NeFFCalculator(Calculator):
 
             ## 3. update topology for current reactive & unreactive sites
             topo_energy = 0.0
-            if k1 > 0.25 * k1max:
-                with Timing("neff update restraint topology"):
-                    topo_energy = self.update_restraint_topology(iterator.temperature_K)
+            with Timing("neff update restraint topology"):
+                topo_energy = self.update_restraint_topology(iterator.temperature_K, custom_loggor)
 
             neq_energy = 0.0
             with Timing("neff calculate potentials again"):
