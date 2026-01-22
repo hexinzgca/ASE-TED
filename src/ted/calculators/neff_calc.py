@@ -526,13 +526,17 @@ class NeFFCalculator(Calculator):
                 self._qt = 0.0
                 
             ## 2. update k for restraint potential for both unreactive & reactive sites
-            k1 = (0.25 * np.abs(self._qt)) / (qmax) # for unreactive sites (strong interaction)
+            k1 = (0.25 * np.abs(self._qt)) / (qmax+0.1) # for unreactive sites (strong interaction)
             if self._time >= t0 and self._time <= tend:
                 k1 = np.maximum(k1, 0.01)
-            k1max = (0.25 * qmax + 0.000) / (qmax)
-            k1min = (0.25 * 0.00 + 0.000) / (qmax)
+            k1max = (0.25 * qmax + 0.000) / (qmax+0.1)
+            k1min = (0.25 * 0.00 + 0.000) / (qmax+0.1)
 
             k2 = 1.0 if self._time > tend else np.maximum(np.exp(-4*(tend - self._time)/(tend - t0)), 0.1)  # for reactive sites (weak interaction)
+
+            # @TEMP
+            k1 = 0.05
+            k2 = 0.05
 
             self._bond_k = self._bond_k0 * k1
             special_index = np.where(self._bond_special_indicator==1)[0]
