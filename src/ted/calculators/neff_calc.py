@@ -432,7 +432,14 @@ class NeFFCalculator(Calculator):
             forces = self._eqcalc.results['forces']
 
             # step 3: calculate non-equilibrium part
-            total_neq_energy = []; total_neq_forces = []        
+            total_neq_energy = []; total_neq_forces = []
+            if 'total_neq_energy' in self._results and self._results['total_neq_energy'] is not None:
+                self._prev_neq_energy = deepcopy(self._results['total_neq_energy'])
+                self._prev_neq_forces = deepcopy(self._results['total_neq_forces'])
+            else:
+                self._prev_neq_energy = None
+                self._prev_neq_forces = None
+
             for _, t in enumerate(self._ne_potentials):
                 with Timing(f"neff calculate potentials {t['type']}"):
 
@@ -475,7 +482,12 @@ class NeFFCalculator(Calculator):
             work_step = []
             # only external neq_force (not total force!) on exertCoords contributes to work!!!
             for i in range(len(self._exertList)): # @TODO
-                work_step.append(np.sum(self._dCoord[self._exertList[i]] * total_neq_forces[i][self._exertList[i]], axis=1))
+                if self._prev_neq_forces is None:
+                    avg_neq_forces_i = total_neq_forces[i]
+                else:
+                    avg_neq_forces_i = 0.5 * (total_neq_forces[i] + self._prev_neq_forces[i])
+                work_step.append(np.sum(self._dCoord[self._exertList[i]] * avg_neq_forces_i[self._exertList[i]], axis=1))
+            
             self._results['work_step'] = deepcopy(work_step)
             if self._results['work'] == [] or self._results['work'] is None: 
                 self._results['work'] = deepcopy(work_step)
@@ -485,11 +497,14 @@ class NeFFCalculator(Calculator):
             # step 5: update prev_coords, exertCoords, Forces & prev_sum_Force_dot_Coords
             self._prev_Coords = atoms.get_positions()
             self._prev_Forces = total_forces.copy()
-            self._prev_sum_Force_dot_Coords += np.sum(total_forces * self._dCoord)
-
+            if self._prev_Forces is None:
+                self._prev_sum_Force_dot_Coords += np.sum(total_forces * self._dCoord)
+            else:
+                self._prev_sum_Force_dot_Coords += np.sum(0.5 * (total_forces + self._prev_Forces) * self._dCoord)
+            
 
     @debug_helper(enable=True, print_args=False, print_return=False)
-    def analysis(self, atoms, iterator, custom_loggor, noneq = False):
+    def analysis(self, atoms, iterator, custom_loggor, noneq = True, only_initialize = False):
         custom_loggor.print(f'=== [Step: {iterator.nsteps:6d}] Neff Setups and Analysis ===')
         with Timing("setup neff charge interaction"):
             self._step = iterator.nsteps
@@ -546,7 +561,10 @@ class NeFFCalculator(Calculator):
             topo_energy = 0.0
             with Timing("neff update restraint topology"):
                 topo_energy = self.update_restraint_topology(iterator.temperature_K, custom_loggor)
-
+            
+            if only_initialize:
+                return
+            
             neq_energy = 0.0
             with Timing("neff calculate potentials again"):
                 xyz = self._eqcalc.atoms.get_positions()

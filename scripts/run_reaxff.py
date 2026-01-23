@@ -30,6 +30,7 @@ parser.add_argument("--reaxff", "-rf", type=str, default="data/reaxff/CHON_reaxf
                     help="Path to ReaxFF force-field file (lammps format)")
 parser.add_argument("--oplsaa", "-op", type=str, default="data/oplsaa/CHON_oplsaa.ffield", 
                     help="Path to OPLSAA force-field file (lammps format)")
+parser.add_argument("--restart", '-rt', type=str, default="", help="Restart from a previous trajectory file")
 parser.add_argument("--uniqname", "-un", type=str, default="",   help="Unique name for the system")
 parser.add_argument("--partition", "-p", type=str, default="",   help="Default partition file name: uniqname.part")
 parser.add_argument("--neff", "-n", type=str, default="", help="Default non-equilibrium force-field file name: uniqname.neff")
@@ -73,9 +74,19 @@ if __name__ == "__main__":
     atoms.set_masses(masses)
     logger.info(f'\nProcessing masses after reset H-atoms: {masses}')
 
-    vel = atoms.get_velocities()
-    logger.info(f'\nProcessing initial velocity after reset H-atoms: {vel}')
-    MaxwellBoltzmannDistribution(atoms, temperature_K=360.0)
+    def init_atom_from_last_frame(atom, fn_traj):
+        with Trajectory(fn_traj, mode='r') as traj:
+            atom.set_positions(traj[-1].get_positions())
+            atom.set_velocities(traj[-1].get_velocities())
+
+    if args.restart:
+        init_atom_from_last_frame(atoms, args.restart)
+        logger.info(f'\nProcessing initial velocity from restart file!!!')
+    else:
+        vel = atoms.get_velocities()
+        logger.info(f'\nProcessing initial velocity after reset H-atoms: {vel}')
+        MaxwellBoltzmannDistribution(atoms, temperature_K=360.0)
+
     logger.info(f'\nProcessing initial velocity after reset H-atoms: {atoms.get_velocities()}')
     logger.info(f'Test atom periodic boundary condition: {atoms.get_pbc()}')
 
@@ -118,16 +129,19 @@ if __name__ == "__main__":
         logger.info(f"{flag} {iterator.nsteps:>6d} {atoms.get_temperature():>15.2f} {atoms.get_kinetic_energy():>15.4f} {atoms.get_potential_energy():>15.4f} {atoms.get_volume():>15.2f} {density:>15.4f}")
 
     # run minimization here
-    with Timing("Minimization"):
-        total_min_steps = config["global"]["min_steps"]
-        logger.info(f"Starting FIRE minimization for {total_min_steps} steps...")
-        dyn = FIRE(atoms, logfile=None, trajectory=None)
+    if not args.restart:
+        with Timing("Minimization"):
+            total_min_steps = config["global"]["min_steps"]
+            logger.info(f"Starting FIRE minimization for {total_min_steps} steps...")
+            dyn = FIRE(atoms, logfile=None, trajectory=None)
 
-        if os.path.exists(f"{flag}/trajectory_min.xyz"): os.remove(f"{flag}/trajectory_min.xyz")
-        dyn.attach(log_atoms_information, interval=1, atoms=atoms, flag="MIN", iterator=dyn)
-        dyn.attach(write_frame, interval=1, filename=f"{flag}/trajectory_min.xyz", atoms=atoms)
-        dyn.run(steps=total_min_steps)
-        logger.info("* FIRE MINIMIZATION FINISHED!")
+            if os.path.exists(f"{flag}/trajectory_min.xyz"): os.remove(f"{flag}/trajectory_min.xyz")
+            dyn.attach(log_atoms_information, interval=1, atoms=atoms, flag="MIN", iterator=dyn)
+            dyn.attach(write_frame, interval=1, filename=f"{flag}/trajectory_min.xyz", atoms=atoms)
+            dyn.run(steps=total_min_steps)
+            logger.info("* FIRE MINIMIZATION FINISHED!")
+    else:
+        logger.info(f'\nProcessing initial velocity from restart file so skip minimization!')
 
     # run NeFF molecular dynamics here
     with Timing("NeFF Molecular Dynamics"):
@@ -168,6 +182,9 @@ if __name__ == "__main__":
         integrator.attach(neff_calc.analysis, interval=1, atoms=atoms, iterator=integrator, 
             custom_loggor=neff_logger, noneq=True) 
         integrator.attach(log_atoms_information, interval=10, atoms=atoms, flag="NVT", iterator=integrator)
+
+        neff_calc.analysis(atoms=atoms, iterator=integrator,
+            custom_loggor=neff_logger, noneq=True, only_initialize=True) # initialize q & k1 & k2
 
         total_steps = config["global"]["steps"]
         integrator.run(total_steps)
