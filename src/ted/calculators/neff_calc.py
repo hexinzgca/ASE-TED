@@ -94,23 +94,41 @@ def dynamics_coulomb4b_potential(pos: np.ndarray, box: np.ndarray = None, t: flo
     qIqJ = np.abs(qref)**2
     k = 14.3996  # eV·Å
     bCO = 1.410; bOH = 0.950 # Å
-        
+    
     # AC, BD 吸引 (AC has a factor of 2!)
     pairAC_energy = - k * 2 * qIqJ/bCO * (1+np.log(rAC_safe/bCO))/ (rAC_safe/bCO)
     pairBD_energy = - k * qIqJ/bOH * (1+np.log(rBD_safe/bOH))/ (rBD_safe/bOH) # @dangerous
-    pairAB_energy = + k * qIqJ/bCO * (1+np.log(rAB_safe/bCO))/ (rAB_safe/bCO)
-    pairCD_energy = + k * qIqJ/bOH * (1+np.log(rCD_safe/bOH))/ (rCD_safe/bOH)
+    pairAB_energy = - k * 2 * qIqJ/bCO * (1+np.log(rAB_safe/bCO))/ (rAB_safe/bCO)
+    pairCD_energy = - k * qIqJ/bOH * (1+np.log(rCD_safe/bOH))/ (rCD_safe/bOH)
 
     prefactor_AC =  + k * 2 * qIqJ/bCO**2 * np.log(rAC_safe/bCO) / (rAC_safe / bCO)**2
     prefactor_BD =  + k * qIqJ/bOH**2 * np.log(rBD_safe/bOH) / (rBD_safe / bOH)**2
-    prefactor_AB =  - k * qIqJ/bCO**2 * np.log(rAB_safe/bCO) / (rAB_safe / bCO)**2
-    prefactor_CD =  - k * qIqJ/bOH**2 * np.log(rCD_safe/bOH) / (rCD_safe / bOH)**2
+    prefactor_AB =  + k * 2 * qIqJ/bCO**2 * np.log(rAB_safe/bCO) / (rAB_safe / bCO)**2
+    prefactor_CD =  + k * qIqJ/bOH**2 * np.log(rCD_safe/bOH) / (rCD_safe / bOH)**2
 
-    # fast neglect interaction for A with free C & B with free D
-    pairAC_energy[len(posA):] = 0
-    pairBD_energy[len(posA):] = 0
-    prefactor_AC[len(posA):] = 0
-    prefactor_BD[len(posA):] = 0
+    # fast neglect interaction for A with free C & B with free D.
+    Lch = len(posA) // 4
+    pairAC_energy[:, len(posA):] = 0
+    pairBD_energy[:, len(posA):] = 0    
+    pairAB_energy = np.zeros_like(pairAB_energy) + np.diag(np.diag(pairAB_energy))
+    pairCD_energy = np.zeros_like(pairCD_energy) + np.diag(np.diag(pairCD_energy))
+
+    prefactor_AC[:, len(posA):]  = 0
+    prefactor_BD[:, len(posA):]  = 0
+    prefactor_AB = np.zeros_like(prefactor_AB) + np.diag(np.diag(prefactor_AB))
+    prefactor_CD = np.zeros_like(prefactor_CD) + np.diag(np.diag(prefactor_CD))
+
+    # print(Lch)
+    # print(np.shape(prefactor_AC))
+    # print(np.shape(prefactor_BD))
+    # print(np.shape(prefactor_AB))
+    # print(np.shape(prefactor_CD))
+
+    for i in range(4):
+        pairAC_energy[i*Lch:(i+1)*Lch, i*Lch:(i+1)*Lch] = 0 # ignore self-interaction
+        pairBD_energy[i*Lch:(i+1)*Lch, i*Lch:(i+1)*Lch] = 0 # ignore self-interaction
+        prefactor_AB[i*Lch:(i+1)*Lch, i*Lch:(i+1)*Lch] = 0 # ignore self-interaction
+        prefactor_CD[i*Lch:(i+1)*Lch, i*Lch:(i+1)*Lch] = 0 # ignore self-interaction
     
     V_energy = np.sum(pairAC_energy) + np.sum(pairBD_energy) + np.sum(pairAB_energy) + np.sum(pairCD_energy)
     F_A = ( - np.sum(prefactor_AC[:, :, None] * drAC / rAC_safe[:, :, None], axis=1) 
@@ -542,16 +560,16 @@ class NeFFCalculator(Calculator):
                 
             ## 2. update k for restraint potential for both unreactive & reactive sites
             k1 = (0.25 * np.abs(self._qt)) / (qmax+0.1) # for unreactive sites (strong interaction)
-            if self._time >= t0 and self._time <= tend:
-                k1 = np.maximum(k1, 0.01)
+            #if self._time >= t0 and self._time <= tend:
+            k1 = np.maximum(k1, 0.05)
             k1max = (0.25 * qmax + 0.000) / (qmax+0.1)
             k1min = (0.25 * 0.00 + 0.000) / (qmax+0.1)
 
-            k2 = 1.0 if self._time > tend else np.maximum(np.exp(-4*(tend - self._time)/(tend - t0)), 0.1)  # for reactive sites (weak interaction)
+            k2 = 1.0 if self._time > tend else np.maximum(np.exp(-4*(tend - self._time)/(tend - t0)), 0.05)  # for reactive sites (weak interaction)
 
             # @TEMP
-            k1 = 0.05
-            k2 = 0.05
+            k1 = 0.00
+            k2 = 0.00
 
             self._bond_k = self._bond_k0 * k1
             special_index = np.where(self._bond_special_indicator==1)[0]

@@ -149,7 +149,7 @@ if __name__ == "__main__":
         integrator = LangevinBAOAB(
             atoms=atoms,
             timestep=config["global"]["timestep"] * units.fs,  # fs
-            T_tau = 20 * config["global"]["timestep"] * units.fs,  # fs
+            T_tau = 50 * config["global"]["timestep"] * units.fs,  # fs
             temperature_K=config["global"]["temperature"],  # K
             disable_cell_langevin=True,  # 仅NVT系综，禁用盒子 Langevin
             rng=np.random.default_rng(), # no seed!!!
