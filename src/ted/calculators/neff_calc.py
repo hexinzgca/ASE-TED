@@ -565,7 +565,7 @@ class NeFFCalculator(Calculator):
             k1max = (0.25 * qmax + 0.000) / (qmax+0.1)
             k1min = (0.25 * 0.00 + 0.000) / (qmax+0.1)
 
-            k2 = 1.0 if self._time > tend else np.maximum(np.exp(-4*(tend - self._time)/(tend - t0)), 0.05)  # for reactive sites (weak interaction)
+            # k2 = 1.0 if self._time > tend else np.maximum(np.exp(-4*(tend - self._time)/(tend - t0)), 0.05)  # for reactive sites (weak interaction)
 
             # @TEMP
             k1 = 0.00
