@@ -550,7 +550,7 @@ class NeFFCalculator(Calculator):
 
             # try to update the status parameters (like qt and bond_k and topology)
             ## 1. update qt for attraction and repulsion intection for reactive sites
-            if noneq and self._time >= t0 and self._time <= tend:
+            if False and noneq and self._time >= t0 and self._time <= tend:
                 # self._qt = qmax * np.sin(np.pi*(self._time - t0)/tT) * np.exp(-(self._time-t0)/texp)
                 xit = (self._time - t0) / tT - 0.5
                 xit_int = np.floor(xit)
