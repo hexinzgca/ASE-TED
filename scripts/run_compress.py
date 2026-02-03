@@ -1,0 +1,198 @@
+import os, sys
+import numpy as np
+from ase import units, Atoms
+from ase.io import write
+from ase.io.trajectory import Trajectory
+from ase.optimize import FIRE
+from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
+from loguru import logger
+import argparse
+import toml
+
+current_script_dir = os.getcwd()
+parent_dir = os.path.dirname(current_script_dir)
+sys.path.append(os.path.join(parent_dir, 'src'))
+
+from ted.calculators.ReaxFFCalculator import ReaxFFCalculator_LAMMPS
+from ted.calculators.OPLSAACalculator import OPLSAACalculator_LAMMPS
+from ted.calculators.partitioned_calc import PartitionedCalculator
+from ted.calculators.compress_calc import CompressCalculator
+from ted.integrators.langevin_nvt import LangevinBAOAB
+from ted.calculators.lammps_utils import parse_lammps_data_to_ase_atoms, load_lammps_data_0, update_lammps_data
+from ted.calculators.decorator_utils import Timing
+
+parser = argparse.ArgumentParser(description="Compress a system using ReaxFF Simulation")
+parser.add_argument("--solver", "-s", type=str, nargs="+", default=["ReaxFF", "OPLSAA"], 
+                    help="List of solver names [inner -> outer partitions]")
+parser.add_argument("--flag", "-f", type=str, default='small1', help="system flags")
+parser.add_argument("--reaxff", "-rf", type=str, default="data/reaxff/CHON_reaxff.ffield", 
+                    help="Path to ReaxFF force-field file (lammps format)")
+parser.add_argument("--oplsaa", "-op", type=str, default="data/oplsaa/CHON_oplsaa.ffield", 
+                    help="Path to OPLSAA force-field file (lammps format)")
+parser.add_argument("--restart", '-rt', type=str, default="", help="Restart from a previous trajectory file")
+parser.add_argument("--uniqname", "-un", type=str, default="",   help="Unique name for the system")
+parser.add_argument("--partition", "-p", type=str, default="",   help="Default partition file name: uniqname.part")
+parser.add_argument("--neff", "-n", type=str, default="", help="Default non-equilibrium force-field file name: uniqname.neff")
+parser.add_argument("--constraint", "-ct", type=str, default="", help="Default constraint definition file name: uniqname.const")
+parser.add_argument("--thermo", "-th", type=str, default="", help="Default thermostat definition file name: uniqname.thermo")
+parser.add_argument("--coord", "-c", type=str, default="", help="Default coordinate file path: uniqname.xyz")
+parser.add_argument("--input", "-i", type=str, default="", help="Default input configuration file path: uniqname.toml")
+parser.add_argument("--dump", "-d", type=str, default="", help="Default dump configuration file path: uniqname.dump")
+parser.add_argument("--log", "-l", type=str, default="", help="Default log file path: uniqname.log")
+parser.add_argument("--device", type=str, default="cpu", help="Compute device (cpu or cuda)")
+args = parser.parse_args()
+
+
+class CustomLogger:
+    def __init__(self, filename: str):
+        self.fileio = open(filename, 'a')
+    def print(self, msg):
+        self.fileio.write(msg + '\n')
+    def __del__(self):
+        self.fileio.close()
+
+        
+if __name__ == "__main__":
+    config = {
+        "global": {
+            "timestep": 0.5,      # (ase time unit fs?)
+            "temperature": 360.0, # in Kelvin
+            "steps": 4000,
+            "comp_steps": 20,
+            "interval": 40,
+        },
+    }
+    if os.path.exists(args.input): config.update(toml.load(args.input))
+
+    flag = 'compress_system1'
+    if os.path.exists(f"{flag}/run.log"): os.remove(f"{flag}/run.log")        
+    logger.add(f"{flag}/run.log", rotation="10 MB", level="INFO")
+    logger = logger.bind(name="Compress Dynamics (for ReaxFF)")
+
+    # step 1: built ASE atoms
+    with open(f'{flag}/pack_mol.data', 'r') as f:
+        data = load_lammps_data_0(f.read())
+        data = update_lammps_data(data, update_atom_index=True)
+    atoms = parse_lammps_data_to_ase_atoms(data)
+    cell = atoms.get_cell()
+    logger.info(f"\nProcessing cell: {cell}")
+    xyz = atoms.get_positions()
+    Lx = np.max(xyz[:, 0]) - np.min(xyz[:, 0])
+    Ly = np.max(xyz[:, 1]) - np.min(xyz[:, 1])
+    Lz = np.max(xyz[:, 2]) - np.min(xyz[:, 2])
+    Lmax = max(Lx, Ly, Lz) + 10
+    logger.info(f"\nProcessing cell dimension: {Lmax} {Lmax} {Lmax}")
+    atoms.set_cell([Lmax, Lmax, Lmax])
+
+    masses_true = atoms.get_masses()
+    density = masses_true.sum() / atoms.get_volume() / (0.001*units.kg) * (0.01*units.m)**3
+    density_target = 1.06e0
+    L0 = cell[0, 0]
+    Lend = L0 / (density_target / density)**(1/3)
+    print(f"\nProcessing L0: {L0:.4f} -> {Lend:.4f}")    
+    # atoms.wrap()
+    # logger.info(f"\nProcessing cell after wrap: {atoms.get_cell()}")
+    
+    logger.info(f"\nProcessing Number of atoms: {len(atoms)}")
+    masses = atoms.get_masses()
+    logger.info(f"\nProcessing masses: {masses}")
+    print('for statistics, here brute force reset H-atoms masses to a larger one! x 6.0')
+    for i in range(len(atoms)):
+        if atoms[i].symbol == 'H': masses[i] *= 6.0
+    atoms.set_masses(masses)
+    logger.info(f'\nProcessing masses after reset H-atoms: {masses}')
+
+    def init_atom_from_last_frame(atom, fn_traj):
+        with Trajectory(fn_traj, mode='r') as traj:
+            atom.set_positions(traj[-1].get_positions())
+            atom.set_velocities(traj[-1].get_velocities())
+
+    if args.restart:
+        init_atom_from_last_frame(atoms, args.restart)
+        logger.info(f'\nProcessing initial velocity from restart file!!!')
+    else:
+        vel = atoms.get_velocities()
+        logger.info(f'\nProcessing initial velocity after reset H-atoms: {vel}')
+        MaxwellBoltzmannDistribution(atoms, temperature_K=360.0)
+    logger.info(f'\nProcessing initial velocity after reset H-atoms: {atoms.get_velocities()}')
+    logger.info(f'Test atom periodic boundary condition: {atoms.get_pbc()}')
+
+    reax_calc0 = ReaxFFCalculator_LAMMPS(ff_file=f'{flag}/reaxff.ff', tmp_dir=f'{flag}/tmp_reax1')
+    comp_calc = CompressCalculator(calc=reax_calc0, L0=L0, Lend=Lend)
+    atoms.calc = comp_calc
+
+    def write_frame(filename: str, atoms: Atoms, append: bool = True):
+        assert filename.endswith('.xyz'), 'filename must end with .xyz'
+        write(filename, atoms, append=append)
+        with Trajectory(filename.replace('.xyz', '.traj'), mode='a') as traj:
+            traj.write(atoms)
+
+    ener_logger = CustomLogger(filename=f'{flag}/ener.log')
+    def log_atoms_information(atoms: Atoms, flag: str, iterator):
+        if iterator.nsteps == 0:
+            #                          ===============!===============!===============!===============!===============!
+            logger.info(f"{flag}   Step  Temperature(K)        Ekin(eV)        Epot(eV)     Volume(A^3)     Rho(g/cm^3)")
+        masses_true = atoms.get_masses().copy()
+        for i in range(len(atoms)):
+            if atoms[i].symbol == 'H': masses_true[i] = 1.0080 # reset H-atoms masses to 1.0080 amu
+        density = masses_true.sum() / atoms.get_volume() / (0.001*units.kg) * (0.01*units.m)**3
+        logger.info(f"{flag} {iterator.nsteps:>6d} {atoms.get_temperature():>15.2f} {atoms.get_kinetic_energy():>15.4f} {atoms.get_potential_energy():>15.4f} {atoms.get_volume():>15.2f} {density:>15.4f}")
+        ener_logger.print(f"{flag} {iterator.nsteps:>6d} {atoms.get_temperature():>15.2f} {atoms.get_kinetic_energy():>15.4f} {atoms.get_potential_energy():>15.4f} {atoms.get_volume():>15.2f} {density:>15.4f}")
+
+    # # run molecular dynamics here
+    with Timing("Compress Molecular Dynamics"):
+        # 温度：300 K（NPT 控温）
+        temperature_K = 300.0
+        # 恒压设置：1 atm → 转换为 ASE 应力单位（eV/Å³）
+        # 1 atm = 1.01325 bar = 1.01325 × 1e-7 eV/Å³ ≈ 1.01325e-7 eV/Å³
+        # 注意：externalstress 是应力（压力的负值），因此 1 atm 压力对应 -1.01325e-7 eV/Å³
+        atm_to_ev_per_ang3 = 1.01325e-7
+        externalstress = -1.0 * atm_to_ev_per_ang3  # -1.01325e-7 eV/Å³（1 atm 恒压）
+
+        # 控温弛豫时间：50 fs（经验值，控温越紧值越小）
+        T_tau = 50.0 * units.fs  # 50e-15 s
+        # 控压弛豫时间：1000 fs（经验值，压浴弛豫通常比热浴慢）
+        P_tau = 1000.0 * units.fs  # 1000e-15 s
+        integrator = LangevinBAOAB(
+            atoms=atoms,
+            timestep=config["global"]["timestep"] * units.fs,  # fs
+            T_tau = 50 * config["global"]["timestep"] * units.fs,  # fs
+            P_tau = 20000 * config["global"]["timestep"] * units.fs,  # fs （经验值，压浴弛豫通常比热浴慢）
+            temperature_K=config["global"]["temperature"],  # K
+            ###
+            externalstress=externalstress,  # NPT 控压（1 atm）
+            hydrostatic=True,  # 仅体积变化，保持晶胞形状（推荐新手用）
+            P_mass_factor=1.0,  # 压浴质量系数（默认即可）
+            disable_cell_langevin=False,  # 开启晶胞的 Langevin 控温
+            ###
+            rng=np.random.default_rng(), # no seed!!!
+        )
+        logger.info(f"test random number: {integrator.rng.random()}")
+
+        traj_path = f"{flag}/trajectory_sample.xyz"
+        if os.path.exists(traj_path): os.remove(traj_path)
+        if os.path.exists(traj_path.replace('.xyz', '.traj')): os.remove(traj_path.replace('.xyz', '.traj'))
+
+        total_steps = config["global"]["steps"]
+        
+        if os.path.exists(f'{flag}/comp.log'): os.remove(f'{flag}/comp.log')
+        comp_logger = CustomLogger(filename=f'{flag}/comp.log')
+
+        sample_interval = config["global"]["interval"]
+        integrator.attach(write_frame, interval=sample_interval, filename=traj_path, atoms=atoms)
+        integrator.attach(comp_calc.compress, interval=1, atoms=atoms, iterator=integrator, 
+            custom_loggor=comp_logger, total_steps=total_steps) 
+        integrator.attach(log_atoms_information, interval=1, atoms=atoms, flag="NPT", iterator=integrator)
+
+        comp_calc.enable_compress = True
+        integrator.run(total_steps)
+        comp_calc.enable_compress = False
+        integrator.run(total_steps)
+        logger.info("* FINISHED!")
+
+    Timing.report()
+    total_steps = config["global"]["steps"]
+    timestep_in_fs = config["global"]["timestep"]
+    speed = total_steps / Timing.timers["NeFF Molecular Dynamics"][1] # use wall time
+    speed *= timestep_in_fs * 1e-6 * 86400.0  # convert step/s to ns/day
+    logger.info(f'NeFF Molecular Dynamics Speed: {speed:.6f} ns / day')
