@@ -77,7 +77,7 @@ from ted.calculators.lammps_utils import ase2lammps_dump
 parser = argparse.ArgumentParser(description="Non Equilibrium - Partitioned Region Dynamics (ReaxFF/MatterSim):MM Simulation")
 parser.add_argument("--solver", "-s", type=str, nargs="+", default=["ReaxFF", "OPLSAA"], 
                     help="List of solver names [inner -> outer partitions]")
-parser.add_argument("--flag", "-f", type=str, default='ne_small1', help="system flags")
+parser.add_argument("--flag", "-f", type=str, default='ne_system1', help="system flags")
 parser.add_argument("--reaxff", "-rf", type=str, default="data/reaxff/CHON_reaxff.ffield", 
                     help="Path to ReaxFF force-field file (lammps format)")
 parser.add_argument("--oplsaa", "-op", type=str, default="data/oplsaa/CHON_oplsaa.ffield", 
@@ -110,7 +110,7 @@ def log_atoms_information(atoms: Atoms, flag: str):
     density = masses_true.sum() / atoms.get_volume() / (0.001*units.kg) * (0.01*units.m)**3
     logger.info(f"{flag} {atoms.get_temperature():>15.2f} {atoms.get_kinetic_energy():>15.4f} {atoms.get_potential_energy():>15.4f} {atoms.get_volume():>15.2f} {density:>15.4f}")
 
-cmd = f'zsh -c "cd {flag} && source ~/.zshrc && lmp < run.in > log.lammps"'
+cmd = f'zsh -c "cd {args.flag} && source ~/.zshrc && lmp < run.in > log.lammps"'
 
 if __name__ == "__main__":
     config = {
