@@ -1,5 +1,6 @@
 import os, sys
 import numpy as np
+import ase
 from ase import units, Atoms
 from ase.io import write
 from ase.io.trajectory import Trajectory
@@ -9,19 +10,25 @@ from loguru import logger
 import argparse
 import toml
 
-current_script_dir = os.getcwd()
+import torch
+from flashmd import get_pretrained
+from flashmd.ase import EnergyCalculator
+from flashmd.ase.langevin import Langevin
+
+current_script_path = os.path.abspath(__file__)
+current_script_dir = os.path.dirname(current_script_path)
 parent_dir = os.path.dirname(current_script_dir)
 sys.path.append(os.path.join(parent_dir, 'src'))
 
 from ted.calculators.ReaxFFCalculator import ReaxFFCalculator_LAMMPS
 from ted.calculators.OPLSAACalculator import OPLSAACalculator_LAMMPS
 from ted.calculators.partitioned_calc import PartitionedCalculator
-from ted.calculators.compress_calc import CompressCalculator
+from ted.calculators.neff_calc import NeFFCalculator
 from ted.integrators.langevin_nvt import LangevinBAOAB
 from ted.calculators.lammps_utils import parse_lammps_data_to_ase_atoms, load_lammps_data_0, update_lammps_data
 from ted.calculators.decorator_utils import Timing
 
-parser = argparse.ArgumentParser(description="Compress a system using ReaxFF Simulation")
+parser = argparse.ArgumentParser(description="Non Equilibrium - Partitioned Region Dynamics (ReaxFF/MatterSim):MM Simulation")
 parser.add_argument("--solver", "-s", type=str, nargs="+", default=["ReaxFF", "OPLSAA"], 
                     help="List of solver names [inner -> outer partitions]")
 parser.add_argument("--flag", "-f", type=str, default='small1', help="system flags")
@@ -42,57 +49,28 @@ parser.add_argument("--log", "-l", type=str, default="", help="Default log file 
 parser.add_argument("--device", type=str, default="cpu", help="Compute device (cpu or cuda)")
 args = parser.parse_args()
 
-
-class CustomLogger:
-    def __init__(self, filename: str):
-        self.fileio = open(filename, 'a')
-    def print(self, msg):
-        self.fileio.write(msg + '\n')
-    def __del__(self):
-        self.fileio.close()
-
-        
 if __name__ == "__main__":
     config = {
         "global": {
-            "timestep": 0.5,      # (ase time unit fs?)
+            "timestep": 16.0,      # (ase time unit fs?)
             "temperature": 360.0, # in Kelvin
-            "steps": 40000000,
-            "comp_steps": 20,
-            "interval": 100,
+            "steps": 10,
+            "min_steps": 50,
+            "interval": 50,
         },
     }
     if os.path.exists(args.input): config.update(toml.load(args.input))
 
-    flag = 'compress_system1'
+    flag = args.flag
     if os.path.exists(f"{flag}/run.log"): os.remove(f"{flag}/run.log")        
     logger.add(f"{flag}/run.log", rotation="10 MB", level="INFO")
-    logger = logger.bind(name="Compress Dynamics (for ReaxFF)")
+    logger = logger.bind(name="Topo Enhenced Dynamics (for ReaxFF)")
 
     # step 1: built ASE atoms
-    with open(f'{flag}/pack_mol.data', 'r') as f:
+    with open(f'{flag}/oplsaa2_react.data', 'r') as f:
         data = load_lammps_data_0(f.read())
         data = update_lammps_data(data, update_atom_index=True)
     atoms = parse_lammps_data_to_ase_atoms(data)
-    cell = atoms.get_cell()
-    logger.info(f"\nProcessing cell: {cell}")
-    xyz = atoms.get_positions()
-    Lx = np.max(xyz[:, 0]) - np.min(xyz[:, 0])
-    Ly = np.max(xyz[:, 1]) - np.min(xyz[:, 1])
-    Lz = np.max(xyz[:, 2]) - np.min(xyz[:, 2])
-    Lmax = max(Lx, Ly, Lz) + 10
-    logger.info(f"\nProcessing cell dimension: {Lmax} {Lmax} {Lmax}")
-    atoms.set_cell([Lmax, Lmax, Lmax])
-
-    masses_true = atoms.get_masses()
-    density = masses_true.sum() / atoms.get_volume() / (0.001*units.kg) * (0.01*units.m)**3
-    density_target = 1.06e0
-    L0 = cell[0, 0]
-    Lend = L0 / (density_target / density)**(1/3)
-    print(f"\nProcessing L0: {L0:.4f} -> {Lend:.4f}")    
-    # atoms.wrap()
-    # logger.info(f"\nProcessing cell after wrap: {atoms.get_cell()}")
-    
     logger.info(f"\nProcessing Number of atoms: {len(atoms)}")
     masses = atoms.get_masses()
     logger.info(f"\nProcessing masses: {masses}")
@@ -114,12 +92,30 @@ if __name__ == "__main__":
         vel = atoms.get_velocities()
         logger.info(f'\nProcessing initial velocity after reset H-atoms: {vel}')
         MaxwellBoltzmannDistribution(atoms, temperature_K=360.0)
+        atoms.set_velocities(  # it is generally a good idea to remove any net velocity
+            atoms.get_velocities() - atoms.get_momenta().sum(axis=0) / atoms.get_masses().sum()
+        )
+
+
     logger.info(f'\nProcessing initial velocity after reset H-atoms: {atoms.get_velocities()}')
     logger.info(f'Test atom periodic boundary condition: {atoms.get_pbc()}')
 
-    reax_calc0 = ReaxFFCalculator_LAMMPS(ff_file=f'{flag}/reaxff.ff', tmp_dir=f'{flag}/tmp_reax1')
-    comp_calc = CompressCalculator(calc=reax_calc0, L0=L0, Lend=Lend)
-    atoms.calc = comp_calc
+    # partitioned calculators
+    # reax_calc0 = ReaxFFCalculator_LAMMPS(ff_file=f'{flag}/reaxff.ff', tmp_dir=f'{flag}/tmp_reax1')
+    # opls_calc0 = OPLSAACalculator_LAMMPS(data_file=f'{flag}/oplsaa1.data', tmp_dir=f'{flag}/tmp_opls1')
+    # opls_calc1 = OPLSAACalculator_LAMMPS(data_file=f'{flag}/oplsaa2.data', tmp_dir=f'{flag}/tmp_opls2')
+    # subCalcs = [
+    #     [reax_calc0, opls_calc0],
+    #     [opls_calc1],
+    # ]
+    # part_calc = PartitionedCalculator(partCalcs=subCalcs, partFile=f'{flag}/part.part')
+    ### flash-MD set up
+    # Choose your time step (go for 10-30x what you would use in normal MD for your system)
+    energy_model, flashmd_model = get_pretrained("pet-omatpes-v2", time_step=16)
+    # Set the energy model (optional, see below for more precise usage)
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    calculator = EnergyCalculator(energy_model, device=device)
+    atoms.calc = calculator
 
     def write_frame(filename: str, atoms: Atoms, append: bool = True):
         assert filename.endswith('.xyz'), 'filename must end with .xyz'
@@ -127,65 +123,68 @@ if __name__ == "__main__":
         with Trajectory(filename.replace('.xyz', '.traj'), mode='a') as traj:
             traj.write(atoms)
 
-    ener_logger = CustomLogger(filename=f'{flag}/ener.log')
     def log_atoms_information(atoms: Atoms, flag: str, iterator):
         if iterator.nsteps == 0:
             #                          ===============!===============!===============!===============!===============!
             logger.info(f"{flag}   Step  Temperature(K)        Ekin(eV)        Epot(eV)     Volume(A^3)     Rho(g/cm^3)")
+        
         masses_true = atoms.get_masses().copy()
         for i in range(len(atoms)):
             if atoms[i].symbol == 'H': masses_true[i] = 1.0080 # reset H-atoms masses to 1.0080 amu
         density = masses_true.sum() / atoms.get_volume() / (0.001*units.kg) * (0.01*units.m)**3
         logger.info(f"{flag} {iterator.nsteps:>6d} {atoms.get_temperature():>15.2f} {atoms.get_kinetic_energy():>15.4f} {atoms.get_potential_energy():>15.4f} {atoms.get_volume():>15.2f} {density:>15.4f}")
-        ener_logger.print(f"{flag} {iterator.nsteps:>6d} {atoms.get_temperature():>15.2f} {atoms.get_kinetic_energy():>15.4f} {atoms.get_potential_energy():>15.4f} {atoms.get_volume():>15.2f} {density:>15.4f}")
 
-    # # run molecular dynamics here
-    with Timing("Compress Molecular Dynamics"):
-        # 温度：300 K（NPT 控温）
-        temperature_K = 300.0
-        # 恒压设置：1 atm → 转换为 ASE 应力单位（eV/Å³）
-        # 1 atm = 1.01325 bar = 1.01325 × 1e-7 eV/Å³ ≈ 1.01325e-7 eV/Å³
-        # 注意：externalstress 是应力（压力的负值），因此 1 atm 压力对应 -1.01325e-7 eV/Å³
-        atm_to_ev_per_ang3 = 1.01325e-7
-        externalstress = -1.0 * atm_to_ev_per_ang3  # -1.01325e-7 eV/Å³（1 atm 恒压）
+    # run minimization here
+    if False and not args.restart:
+        with Timing("Minimization"):
+            total_min_steps = config["global"]["min_steps"]
+            logger.info(f"Starting FIRE minimization for {total_min_steps} steps...")
+            dyn = FIRE(atoms, logfile=None, trajectory=None)
 
-        T_tau = 100.0 * units.fs
-        P_tau = 500.0 * units.fs
-        integrator = LangevinBAOAB(
+            if os.path.exists(f"{flag}/trajectory_min.xyz"): os.remove(f"{flag}/trajectory_min.xyz")
+            dyn.attach(log_atoms_information, interval=1, atoms=atoms, flag="MIN", iterator=dyn)
+            dyn.attach(write_frame, interval=1, filename=f"{flag}/trajectory_min.xyz", atoms=atoms)
+            dyn.run(steps=total_min_steps)
+            logger.info("* FIRE MINIMIZATION FINISHED!")
+    else:
+        logger.info(f'\nProcessing initial velocity from restart file so skip minimization!')
+
+    # run NeFF molecular dynamics here
+    with Timing("NeFF Molecular Dynamics"):
+        # Run MD
+        integrator = Langevin(
             atoms=atoms,
             timestep=config["global"]["timestep"] * units.fs,  # fs
-            T_tau = T_tau,  # fs
-            P_tau = P_tau,  # fs （经验值，压浴弛豫通常比热浴慢）
-            temperature_K=config["global"]["temperature"],  # K
-            ###
-            externalstress=externalstress,  # NPT 控压（1 atm）
-            hydrostatic=True,  # 仅体积变化，保持晶胞形状（推荐新手用）
-            P_mass_factor=1.0,  # 压浴质量系数（默认即可）
-            disable_cell_langevin=False,  # 开启晶胞的 Langevin 控温
-            rng=np.random.default_rng(), # no seed!!!
+            temperature_K=config["global"]["temperature"],
+            time_constant=100*ase.units.fs,
+            model=flashmd_model,
+            device=device
+            # rng=np.random.default_rng(), # no seed!!!
         )
-        logger.info(f"test random number: {integrator.rng.random()}")
+        # logger.info(f"test random number: {integrator.rng.random()}")
 
         traj_path = f"{flag}/trajectory_sample.xyz"
         if os.path.exists(traj_path): os.remove(traj_path)
         if os.path.exists(traj_path.replace('.xyz', '.traj')): os.remove(traj_path.replace('.xyz', '.traj'))
+        # if os.path.exists(neff_calc._work_record_file): os.remove(neff_calc._work_record_file)
+        # if os.path.exists(neff_calc._bond_record_file): os.remove(neff_calc._bond_record_file)
 
-        total_steps = config["global"]["steps"]
-        
-        if os.path.exists(f'{flag}/comp.log'): os.remove(f'{flag}/comp.log')
-        comp_logger = CustomLogger(filename=f'{flag}/comp.log')
+        class CustomLogger:
+            def __init__(self, filename: str):
+                self.fileio = open(filename, 'a')
+            def print(self, msg):
+                self.fileio.write(msg + '\n')
+            def __del__(self):
+                self.fileio.close()
 
         sample_interval = config["global"]["interval"]
-        integrator.attach(write_frame, interval=sample_interval, filename=traj_path, atoms=atoms)
-        # integrator.attach(comp_calc.compress, interval=1, atoms=atoms, iterator=integrator, 
-        #     custom_loggor=comp_logger, total_steps=total_steps) 
-        integrator.attach(log_atoms_information, interval=50, atoms=atoms, flag="NPT", iterator=integrator)
-
-        comp_calc.enable_compress = True
+        integrator.attach(write_frame, interval=1, filename=traj_path, atoms=atoms)
+        # integrator.attach(part_calc.analysis, interval=1, atoms=atoms, iterator=integrator, 
+        #     custom_loggor=part_logger)
+        integrator.attach(log_atoms_information, interval=1, atoms=atoms, flag="NVT", iterator=integrator)
+        total_steps = config["global"]["steps"]
         integrator.run(total_steps)
-        comp_calc.enable_compress = False
-        integrator.run(total_steps)
-        logger.info("* FINISHED!")
+        logger.info("* NeFF MD FINISHED!")
 
     Timing.report()
     total_steps = config["global"]["steps"]

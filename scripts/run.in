@@ -1,0 +1,29 @@
+atom_style full 
+units real
+boundary p p p 
+box tilt large
+atom_modify sort 0 0.0
+
+# -------------------- 读取UFF格式data文件 --------------------
+read_data       ase_gen.data
+mass 1 12.011000 
+mass 2 4.008000
+mass 3 15.999000
+
+pair_style reaxff NULL 
+pair_coeff * * reaxff.ff C H O
+fix charge all qeq/reax 1 0.0 10.0 1.0e-6 reaxff
+newton on 
+
+# 快速计算优化：邻居列表设置（不变，保持高效）
+neighbor        0.5 bin
+neigh_modify    every 10 delay 0 check no one 10000 page 100000
+
+fix             1 all npt temp 360.0 360.0 100.0 iso 1.0 1.0 200.0
+thermo_style    custom step temp press pe ke etotal vol density # 实时监控密度变化
+thermo          10
+dump            1 all custom 10 final.dump id type x y z vx vy vz  # 只输出最后一步
+dump_modify     1 sort id 
+run             10
+
+write_data      final.data 

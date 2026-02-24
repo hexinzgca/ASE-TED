@@ -57,14 +57,15 @@ if __name__ == "__main__":
         "global": {
             "timestep": 0.5,      # (ase time unit fs?)
             "temperature": 360.0, # in Kelvin
-            "steps": 40000000,
+            "steps": 4000,
             "comp_steps": 20,
-            "interval": 100,
+            "min_steps": 500,
+            "interval": 40,
         },
     }
     if os.path.exists(args.input): config.update(toml.load(args.input))
 
-    flag = 'compress_system1'
+    flag = 'compress_system1_900'
     if os.path.exists(f"{flag}/run.log"): os.remove(f"{flag}/run.log")        
     logger.add(f"{flag}/run.log", rotation="10 MB", level="INFO")
     logger = logger.bind(name="Compress Dynamics (for ReaxFF)")
@@ -104,8 +105,10 @@ if __name__ == "__main__":
 
     def init_atom_from_last_frame(atom, fn_traj):
         with Trajectory(fn_traj, mode='r') as traj:
-            atom.set_positions(traj[-1].get_positions())
-            atom.set_velocities(traj[-1].get_velocities())
+            atom.set_positions(traj[600].get_positions())
+            atom.set_velocities(traj[600].get_velocities())
+            atom.set_cell(traj[600].get_cell())
+            print(f"\n!!!Processing cell after set: {atom.get_cell()}")
 
     if args.restart:
         init_atom_from_last_frame(atoms, args.restart)
@@ -139,6 +142,18 @@ if __name__ == "__main__":
         logger.info(f"{flag} {iterator.nsteps:>6d} {atoms.get_temperature():>15.2f} {atoms.get_kinetic_energy():>15.4f} {atoms.get_potential_energy():>15.4f} {atoms.get_volume():>15.2f} {density:>15.4f}")
         ener_logger.print(f"{flag} {iterator.nsteps:>6d} {atoms.get_temperature():>15.2f} {atoms.get_kinetic_energy():>15.4f} {atoms.get_potential_energy():>15.4f} {atoms.get_volume():>15.2f} {density:>15.4f}")
 
+    with Timing("Minimization"):
+        total_min_steps = config["global"]["min_steps"]
+        logger.info(f"Starting FIRE minimization for {total_min_steps} steps...")
+        dyn = FIRE(atoms, logfile=None, trajectory=None)
+
+        if os.path.exists(f"{flag}/trajectory_min.xyz"): os.remove(f"{flag}/trajectory_min.xyz")
+        dyn.attach(log_atoms_information, interval=1, atoms=atoms, flag="MIN", iterator=dyn)
+        dyn.attach(write_frame, interval=1, filename=f"{flag}/trajectory_min.xyz", atoms=atoms)
+        dyn.run(steps=total_min_steps)
+        logger.info("* FIRE MINIMIZATION FINISHED!")
+    exit(0)
+
     # # run molecular dynamics here
     with Timing("Compress Molecular Dynamics"):
         # 温度：300 K（NPT 控温）
@@ -149,19 +164,22 @@ if __name__ == "__main__":
         atm_to_ev_per_ang3 = 1.01325e-7
         externalstress = -1.0 * atm_to_ev_per_ang3  # -1.01325e-7 eV/Å³（1 atm 恒压）
 
-        T_tau = 100.0 * units.fs
-        P_tau = 500.0 * units.fs
+        # 控温弛豫时间：50 fs（经验值，控温越紧值越小）
+        T_tau = 50.0 * units.fs  # 50e-15 s
+        # 控压弛豫时间：1000 fs（经验值，压浴弛豫通常比热浴慢）
+        P_tau = 1000.0 * units.fs  # 1000e-15 s
         integrator = LangevinBAOAB(
             atoms=atoms,
             timestep=config["global"]["timestep"] * units.fs,  # fs
-            T_tau = T_tau,  # fs
-            P_tau = P_tau,  # fs （经验值，压浴弛豫通常比热浴慢）
+            T_tau = 50 * config["global"]["timestep"] * units.fs,  # fs
+            P_tau = 20000 * config["global"]["timestep"] * units.fs,  # fs （经验值，压浴弛豫通常比热浴慢）
             temperature_K=config["global"]["temperature"],  # K
             ###
             externalstress=externalstress,  # NPT 控压（1 atm）
             hydrostatic=True,  # 仅体积变化，保持晶胞形状（推荐新手用）
             P_mass_factor=1.0,  # 压浴质量系数（默认即可）
             disable_cell_langevin=False,  # 开启晶胞的 Langevin 控温
+            ###
             rng=np.random.default_rng(), # no seed!!!
         )
         logger.info(f"test random number: {integrator.rng.random()}")
@@ -177,9 +195,9 @@ if __name__ == "__main__":
 
         sample_interval = config["global"]["interval"]
         integrator.attach(write_frame, interval=sample_interval, filename=traj_path, atoms=atoms)
-        # integrator.attach(comp_calc.compress, interval=1, atoms=atoms, iterator=integrator, 
-        #     custom_loggor=comp_logger, total_steps=total_steps) 
-        integrator.attach(log_atoms_information, interval=50, atoms=atoms, flag="NPT", iterator=integrator)
+        integrator.attach(comp_calc.compress, interval=1, atoms=atoms, iterator=integrator, 
+            custom_loggor=comp_logger, total_steps=total_steps) 
+        integrator.attach(log_atoms_information, interval=1, atoms=atoms, flag="NPT", iterator=integrator)
 
         comp_calc.enable_compress = True
         integrator.run(total_steps)

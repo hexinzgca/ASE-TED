@@ -417,3 +417,66 @@ def parse_lammps_data_to_ase_atoms(data):
         pbc=True
     )
 
+
+def ase2lammps_dump(atoms, dump_path, units='real'):
+    """
+    将ASE Atoms转换为LAMMPS dump文件（支持real/metal单位）
+    参数：
+        atoms: ASE Atoms对象
+        dump_path: 输出dump文件路径
+        units: 单位体系（real/metal），对应LAMMPS的units设置
+    """
+    # 1. 单位转换（关键：ASE默认是metal单位，需转real）
+    # metal: 长度Å, 速度Å/ps; real: 长度Å, 速度Å/fs（1 ps = 1000 fs）
+    unit_convert = {
+        'metal': {'velocity': 1.0},  # 无需转换
+        'real': {'velocity': 0.001}   # Å/ps → Å/fs（除以1000）
+    }
+    convert = unit_convert[units]
+
+    # 2. 原子类型映射（自动识别体系中的元素）
+    elements = list(set([atom.number for atom in atoms]))
+    type_map = {num: idx+1 for idx, num in enumerate(elements)}
+
+    # 3. 写入dump文件
+    with open(dump_path, 'w', encoding='utf-8') as f:
+        # TIMESTEP（单帧设为0）
+        f.write("ITEM: TIMESTEP\n0\n")
+        
+        # 原子数量
+        n_atoms = len(atoms)
+        f.write(f"ITEM: NUMBER OF ATOMS\n{n_atoms}\n")
+        
+        # 晶胞边界（正交晶胞，适配PBC）
+        cell = atoms.get_cell()
+        pbc = atoms.get_pbc()
+        xlo, xhi = 0.0, cell[0][0]
+        ylo, yhi = 0.0, cell[1][1]
+        zlo, zhi = 0.0, cell[2][2]
+        bound_flags = ['pp' if p else 'fm' for p in pbc]
+        f.write(f"ITEM: BOX BOUNDS {' '.join(bound_flags)}\n")
+        f.write(f"{xlo:.6f} {xhi:.6f}\n")
+        f.write(f"{ylo:.6f} {yhi:.6f}\n")
+        f.write(f"{zlo:.6f} {zhi:.6f}\n")
+        
+        # 原子属性列（id type x y z 可选vx vy vz）
+        has_velocity = hasattr(atoms, 'get_velocities') and atoms.get_velocities() is not None
+        columns = ['id', 'type', 'x', 'y', 'z']
+        if has_velocity:
+            columns.extend(['vx', 'vy', 'vz'])
+        f.write(f"ITEM: ATOMS {' '.join(columns)}\n")
+        
+        # 写入每个原子的信息
+        velocities = atoms.get_velocities() if has_velocity else np.zeros((n_atoms, 3))
+        for atom_idx, (atom, vel) in enumerate(zip(atoms, velocities)):
+            aid = atom_idx + 1  # LAMMPS ID从1开始
+            atype = type_map[atom.number]
+            x, y, z = atom.position  # 长度单位始终是Å（real/metal都兼容）
+            # 速度单位转换
+            vx, vy, vz = vel * convert['velocity']
+            
+            if has_velocity:
+                atom_line = f"{aid} {atype} {x:.6f} {y:.6f} {z:.6f} {vx:.8f} {vy:.8f} {vz:.8f}\n"
+            else:
+                atom_line = f"{aid} {atype} {x:.6f} {y:.6f} {z:.6f}\n"
+            f.write(atom_line)

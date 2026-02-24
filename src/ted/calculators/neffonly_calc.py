@@ -10,6 +10,7 @@ from ase.calculators.calculator import Calculator
 from .decorator_utils import debug_helper, Timing
 from .lammps_utils import load_lammps_data_0
 
+
 def displacement(posI: np.ndarray, posJ: np.ndarray, box: np.ndarray = None):
     """
     Returns:
@@ -20,7 +21,6 @@ def displacement(posI: np.ndarray, posJ: np.ndarray, box: np.ndarray = None):
         dr -= np.rint(dr / box) * box
     return dr
 
-
 def safe_norm(dr, axis: int = 1, eps: float = 1.0e-6):
     """
     Returns:
@@ -29,7 +29,6 @@ def safe_norm(dr, axis: int = 1, eps: float = 1.0e-6):
     r_safe = np.linalg.norm(dr, axis=axis)
     r_safe[r_safe == 0] = eps
     return r_safe
-
 
 @debug_helper(enable=True, print_args=False, print_return=False)
 def dynamics_restraint_potential(pos: np.ndarray, box: np.ndarray = None, t: float = 0.0, *args):
@@ -96,14 +95,14 @@ def dynamics_coulomb4b_potential(pos: np.ndarray, box: np.ndarray = None, t: flo
     bCO = 1.410; bOH = 0.950 # Å
     
     # AC, BD 吸引 (AC has a factor of 2!)
-    pairAC_energy = - k * 2 * qIqJ/bCO * (1+np.log(rAC_safe/bCO))/ (rAC_safe/bCO)
+    pairAC_energy = - k * qIqJ/bCO * (1+np.log(rAC_safe/bCO))/ (rAC_safe/bCO)
     pairBD_energy = - k * qIqJ/bOH * (1+np.log(rBD_safe/bOH))/ (rBD_safe/bOH) # @dangerous
-    pairAB_energy = - k * 2 * qIqJ/bCO * (1+np.log(rAB_safe/bCO))/ (rAB_safe/bCO)
+    pairAB_energy = - k * qIqJ/bCO * (1+np.log(rAB_safe/bCO))/ (rAB_safe/bCO)
     pairCD_energy = - k * qIqJ/bOH * (1+np.log(rCD_safe/bOH))/ (rCD_safe/bOH)
 
-    prefactor_AC =  + k * 2 * qIqJ/bCO**2 * np.log(rAC_safe/bCO) / (rAC_safe / bCO)**2
+    prefactor_AC =  + k * qIqJ/bCO**2 * np.log(rAC_safe/bCO) / (rAC_safe / bCO)**2
     prefactor_BD =  + k * qIqJ/bOH**2 * np.log(rBD_safe/bOH) / (rBD_safe / bOH)**2
-    prefactor_AB =  + k * 2 * qIqJ/bCO**2 * np.log(rAB_safe/bCO) / (rAB_safe / bCO)**2
+    prefactor_AB =  + k * qIqJ/bCO**2 * np.log(rAB_safe/bCO) / (rAB_safe / bCO)**2
     prefactor_CD =  + k * qIqJ/bOH**2 * np.log(rCD_safe/bOH) / (rCD_safe / bOH)**2
 
     # fast neglect interaction for A with free C & B with free D.
@@ -127,8 +126,8 @@ def dynamics_coulomb4b_potential(pos: np.ndarray, box: np.ndarray = None, t: flo
     for i in range(4):
         pairAC_energy[i*Lch:(i+1)*Lch, i*Lch:(i+1)*Lch] = 0 # ignore self-interaction
         pairBD_energy[i*Lch:(i+1)*Lch, i*Lch:(i+1)*Lch] = 0 # ignore self-interaction
-        prefactor_AB[i*Lch:(i+1)*Lch, i*Lch:(i+1)*Lch] = 0 # ignore self-interaction
-        prefactor_CD[i*Lch:(i+1)*Lch, i*Lch:(i+1)*Lch] = 0 # ignore self-interaction
+        prefactor_AC[i*Lch:(i+1)*Lch, i*Lch:(i+1)*Lch] = 0 # ignore self-interaction
+        prefactor_BD[i*Lch:(i+1)*Lch, i*Lch:(i+1)*Lch] = 0 # ignore self-interaction
     
     V_energy = np.sum(pairAC_energy) + np.sum(pairBD_energy) + np.sum(pairAB_energy) + np.sum(pairCD_energy)
     F_A = ( - np.sum(prefactor_AC[:, :, None] * drAC / rAC_safe[:, :, None], axis=1) 
@@ -142,40 +141,39 @@ def dynamics_coulomb4b_potential(pos: np.ndarray, box: np.ndarray = None, t: flo
     return V_energy, [F_A, F_B, F_C, F_D]
 
 
-class NeFFCalculator(Calculator):
+class NeFFOnlyCalculator(Calculator):
     """
-    Calculator for NeFF potential.
+    Calculator for NeFFOnly potential.
     """
     implemented_properties = ['energy', 'forces']
 
-    def __init__(self, calc: Calculator, 
-        neff_file: str,
+    def __init__(self,
+        NeFFOnly_file: str,
         bond_topo_file: str,
         work_record_file: str, 
         bond_record_file: str):
-
-        self._eqcalc = calc
-        self._neff_file = neff_file
+        self._NeFFOnly_file = NeFFOnly_file
         self._bond_topo_file = bond_topo_file
         self._work_record_file = work_record_file
         self._bond_record_file = bond_record_file
         if os.path.exists(self._work_record_file): os.remove(self._work_record_file)
         if os.path.exists(self._bond_record_file): os.remove(self._bond_record_file)
+        self.no_neq = False
 
-        # read NeFF potential from neff file
-        self._neff_data = self.PARSE_NEFF_FILE(neff_file)
-        self._ne_potentials = deepcopy(self._neff_data['Coeffs'])
+        # read NeFFOnly potential from NeFFOnly file
+        self._NeFFOnly_data = self.PARSE_NeFFOnly_FILE(NeFFOnly_file)
+        self._ne_potentials = deepcopy(self._NeFFOnly_data['Coeffs'])
 
         self._exertList = []
         for _, t in enumerate(self._ne_potentials):
-            neff_atom_list = []
+            NeFFOnly_atom_list = []
             for atom_list in t['lists']:
                 for index in atom_list:
-                    if index not in neff_atom_list: neff_atom_list.append(index)
-            neff_atom_list.sort()
-            self._exertList.append(np.array(neff_atom_list))
+                    if index not in NeFFOnly_atom_list: NeFFOnly_atom_list.append(index)
+            NeFFOnly_atom_list.sort()
+            self._exertList.append(np.array(NeFFOnly_atom_list))
 
-        # read additional NeFF potential from bond topo file
+        # read additional NeFFOnly potential from bond topo file
         if os.path.exists(self._bond_topo_file):
             with open(self._bond_topo_file, 'r') as f:
                 self._bond_data = load_lammps_data_0(f.read())
@@ -189,7 +187,7 @@ class NeFFCalculator(Calculator):
             self._bond_special_label = [] # label for reaction
 
             kcalpmol2eV = 0.0433641
-            neff_atom_list = []
+            NeFFOnly_atom_list = []
             _pairs = {}
             for i, t in enumerate(self._bond_data['Bonds']):
                 btype = t['type']
@@ -213,7 +211,7 @@ class NeFFCalculator(Calculator):
                     continue
 
                 for index in aindex:
-                    if index not in neff_atom_list: neff_atom_list.append(index)
+                    if index not in NeFFOnly_atom_list: NeFFOnly_atom_list.append(index)
 
                 self._bond_type.append(btype) # btype count from 1
                 self._bond_k0.append(k)
@@ -241,8 +239,8 @@ class NeFFCalculator(Calculator):
                 'ncls': 2,
                 'lists': [self._bond_Iinfo[0], self._bond_Jinfo[0]]
             })
-            neff_atom_list.sort()
-            self._exertList.append(np.array(neff_atom_list))
+            NeFFOnly_atom_list.sort()
+            self._exertList.append(np.array(NeFFOnly_atom_list))
         else:
             self._bond_restraint = False
 
@@ -268,9 +266,9 @@ class NeFFCalculator(Calculator):
         super().__init__()
 
     @classmethod
-    def PARSE_NEFF_FILE(cls, filename: str):
+    def PARSE_NeFFOnly_FILE(cls, filename: str):
         """
-        Parse the NEFF block from the NEFF file.
+        Parse the NeFFOnly block from the NeFFOnly file.
         """
         data = {'Coeffs': [], 'Forces': []}
         with open(filename, 'r') as f: lines = f.readlines()
@@ -297,32 +295,25 @@ class NeFFCalculator(Calculator):
                 while i < len(lines) and lines[i].strip().startswith('#'): i += 1
                 while i < len(lines) and lines[i].strip() != '':
                     terms = lines[i].strip().split('#')[0].split()
-                    force_id, neff_id, atom_idx, atom_icls = int(terms[0]), int(terms[1]), int(terms[2]), int(terms[3])
-                    neff_ref = data['Coeffs'][neff_id - 1]
+                    force_id, NeFFOnly_id, atom_idx, atom_icls = int(terms[0]), int(terms[1]), int(terms[2]), int(terms[3])
+                    NeFFOnly_ref = data['Coeffs'][NeFFOnly_id - 1]
                     data['Forces'].append({
                         'id': force_id,
-                        'neid': neff_id,
+                        'neid': NeFFOnly_id,
                         'aindex': atom_idx,
                         'acls': atom_icls,
                     })
-                    neff_ref['lists'][atom_icls - 1].append(atom_idx - 1)
+                    NeFFOnly_ref['lists'][atom_icls - 1].append(atom_idx - 1)
                     i += 1
         for i, t in enumerate(data['Coeffs']):
             for acls in t['lists']: acls.sort()
         return data
 
-    @property
-    def calc(self):
-        return self._eqcalc
-
-    @property
-    def ne_potentials(self):
-        return self._ne_potentials
 
     @debug_helper(enable=True, print_args=False, print_return=False)
-    def update_restraint_topology(self, refered_temperature_K = 300, custom_loggor = None): 
-        box = np.diag(self._eqcalc.atoms.get_cell())
-        xyz = self._eqcalc.atoms.get_positions()
+    def update_restraint_topology(self, atoms, refered_temperature_K = 300, custom_loggor = None): 
+        box = np.diag(atoms.get_cell())
+        xyz = atoms.get_positions()
 
         posI_sp = xyz[self._bond_Iinfo[0]][self._bond_special_indice].copy()
         posJ_sp = xyz[self._bond_Jinfo[0]][self._bond_special_indice].copy()
@@ -424,12 +415,12 @@ class NeFFCalculator(Calculator):
 
     @debug_helper(enable=True, print_args=False, print_return=False)
     def calculate(self, atoms, properties, system_changes):
-        with Timing("neff calculate"):
+        with Timing("NeFFOnly calculate"):
             xyz = atoms.get_positions()
             box = np.diag(atoms.get_cell())
 
             # step 1: check the change of coordinates
-            update_eq_calc = True
+            update_eq_calc = False
             if self._prev_Coords is not None:
                 self._dCoord = displacement(atoms.get_positions(), self._prev_Coords, box)
                 max_dCoord_norm = np.max(np.linalg.norm(self._dCoord, axis=1))
@@ -439,15 +430,16 @@ class NeFFCalculator(Calculator):
                 self._prev_Forces = np.zeros_like(xyz)
                 self._dCoord = np.zeros_like(xyz)
                 self._prev_sum_Force_dot_Coords = 0.0
-            
-            # step 2: update eq calculator if needed
-            if update_eq_calc:
-                self._eqcalc.calculate(atoms=atoms, properties=['energy', 'forces'], system_changes=['positions'])
-            else:
-                _debug_print("*** No update for eq calculator ***")
 
-            energy = self._eqcalc.results['energy']
-            forces = self._eqcalc.results['forces']
+            # step 2: update eq calculator if needed
+            # if update_eq_calc:
+            #     self._eqcalc.calculate(atoms=atoms, properties=['energy', 'forces'], system_changes=['positions'])
+            #     energy = self._eqcalc.results['energy']
+            #     forces = self._eqcalc.results['forces']
+            # else:
+            #     _debug_print("*** No update for eq calculator ***")
+            energy = 0.0
+            forces = np.zeros_like(xyz)
 
             # step 3: calculate non-equilibrium part
             total_neq_energy = []; total_neq_forces = []
@@ -459,7 +451,7 @@ class NeFFCalculator(Calculator):
                 self._prev_neq_forces = None
 
             for _, t in enumerate(self._ne_potentials):
-                with Timing(f"neff calculate potentials {t['type']}"):
+                with Timing(f"NeFFOnly calculate potentials {t['type']}"):
 
                     neq_energy = 0.0; neq_forces = np.zeros_like(forces)
                     atoms_pos = [xyz[atom_list] for atom_list in t['lists']] # atom_list can repeat
@@ -468,8 +460,10 @@ class NeFFCalculator(Calculator):
                     func = t['func']
                     if t['type'] == 'coulomb4b':
                         neq_energy, fcoll = func(atoms_pos, box, self._time, self._qt) # it's OK!
+                        print('1:', neq_energy)
                     elif t['type'] == 'restraint':
                         neq_energy, fcoll = func(atoms_pos, box, self._time, self._bond_k, self._bond_r0)
+                        print('2:', neq_energy)
                     else:
                         raise ValueError(f"unsupported potential type: {t['type']}")
                     
@@ -487,8 +481,57 @@ class NeFFCalculator(Calculator):
             total_energy = energy + reduced_neq_energy
             total_forces = forces + reduced_neq_forces
 
+            # ==================== 核心修正代码 ====================
+            scale = 1.0
+            # 1. 修正：np.where返回元组，提取数组部分；计算力的范数（逐原子）
+            force_norms = np.linalg.norm(total_neq_forces[0], axis=1)  # 每个原子的力的模长（N,）
+            acted_idx = np.where(force_norms > 1.0e-8)[0]  # 提取非零力原子的索引（一维数组）
+
+            # 2. 修正：获取原子质量并转为二维数组（N×1），避免维度不匹配
+            atom_masses = atoms.get_masses()  # 正确获取质量（N,）
+            masses_2d = atom_masses.reshape(-1, 1)  # 转为(N,1)，适配total_forces的(N,3)
+
+            # 3. 修正：速度更新公式（维度匹配，语法正确）
+            # dt=0.5 作为时间步长，需保证单位统一（如fs）
+            velocity_new = atoms.get_velocities() + (1 / masses_2d) * scale * total_forces * 0.5  
+
+            # 4. 修正：循环条件（处理空索引，避免除以0；维度匹配）
+            if len(acted_idx) > 0:  # 避免无有效原子时的运算错误
+                # 计算动能比：只针对有非零力的原子
+                kinetic_new = 0.5 * np.sum(atom_masses[acted_idx] * np.sum(velocity_new[acted_idx]**2, axis=1))
+                kinetic_old = 0.5 * np.sum(atom_masses[acted_idx] * np.sum(atoms.get_velocities()[acted_idx]**2, axis=1))
+                
+                # 循环调整scale，直到动能比≤1.5（添加最大迭代次数，避免死循环）
+                max_iter = 50  # 防止死循环的保护
+                iter_count = 0
+                while (kinetic_new / kinetic_old) > 2.0 and iter_count < max_iter:
+                    scale *= 0.75
+                    # 重新计算速度
+                    velocity_new = atoms.get_velocities() + (1 / masses_2d) * scale * total_forces * 0.5
+                    # 重新计算动能比
+                    kinetic_new = np.sum(atom_masses[acted_idx] * np.sum(velocity_new[acted_idx]**2, axis=1))
+                    iter_count += 1
+
+            # 5. 修正：所有缩放操作（保证变量类型匹配，避免语法错误）
+            total_energy *= scale
+            total_forces *= scale  # 若total_force是数组，逐元素缩放
+            reduced_neq_energy *= scale
+            reduced_neq_forces *= scale  # 若为数组，逐元素缩放
+            total_neq_energy = [t * scale for t in total_neq_energy]  # 列表缩放
+            total_neq_forces = [t * scale for t in total_neq_forces]  # 列表内数组缩放
+
+            print(total_energy)
+            print(total_neq_energy)
+            print(f'scale = {scale}')
+            print('len force act = ', len(acted_idx))
+            
             self.results['energy'] = total_energy
             self.results['forces'] = total_forces
+
+            if self.no_neq: # not for dynamics
+                self.results['energy'] = 0.0
+                self.results['forces'] = np.zeros_like(total_forces)
+
             self._results['energy'] = total_energy
             self._results['forces'] = total_forces
             self._results['reduced_neq_energy'] = reduced_neq_energy
@@ -519,12 +562,11 @@ class NeFFCalculator(Calculator):
                 self._prev_sum_Force_dot_Coords += np.sum(total_forces * self._dCoord)
             else:
                 self._prev_sum_Force_dot_Coords += np.sum(0.5 * (total_forces + self._prev_Forces) * self._dCoord)
-            
 
     @debug_helper(enable=True, print_args=False, print_return=False)
     def analysis(self, atoms, iterator, custom_loggor, noneq = True, only_initialize = False):
-        custom_loggor.print(f'=== [Step: {iterator.nsteps:6d}] Neff Setups and Analysis ===')
-        with Timing("setup neff charge interaction"):
+        custom_loggor.print(f'=== [Step: {iterator.nsteps:6d}] NeFFOnly Setups and Analysis ===')
+        with Timing("setup NeFFOnly charge interaction"):
             self._step = iterator.nsteps
             self._time = iterator.nsteps * iterator.dt
 
@@ -550,26 +592,22 @@ class NeFFCalculator(Calculator):
 
             # try to update the status parameters (like qt and bond_k and topology)
             ## 1. update qt for attraction and repulsion intection for reactive sites
-            if False and noneq and self._time >= t0 and self._time <= tend:
-                # self._qt = qmax * np.sin(np.pi*(self._time - t0)/tT) * np.exp(-(self._time-t0)/texp)
-                xit = (self._time - t0) / tT - 0.5
-                xit_int = np.floor(xit)
-                self._qt = qmax * (-1)**xit_int * (2*xit_int+2 - 2 * (self._time - t0) / tT)
+            if self._time >= t0 and self._time <= tend:
+                self._qt = qmax * np.sin(np.pi*(self._time - t0)/tT) * np.exp(-(self._time-t0)/texp)
+                # xit = (self._time - t0) / tT - 0.5
+                # xit_int = np.floor(xit)
+                # self._qt = qmax * (-1)**xit_int * (2*xit_int+2 - 2 * (self._time - t0) / tT)
             else:
                 self._qt = 0.0
-                
+            
+            self._qt = 0.5
+            
             ## 2. update k for restraint potential for both unreactive & reactive sites
-            k1 = (0.25 * np.abs(self._qt)) / (qmax+0.1) # for unreactive sites (strong interaction)
-            #if self._time >= t0 and self._time <= tend:
-            k1 = np.maximum(k1, 0.05)
-            k1max = (0.25 * qmax + 0.000) / (qmax+0.1)
-            k1min = (0.25 * 0.00 + 0.000) / (qmax+0.1)
-
-            # k2 = 1.0 if self._time > tend else np.maximum(np.exp(-4*(tend - self._time)/(tend - t0)), 0.05)  # for reactive sites (weak interaction)
-
+            k1 = 0.1  #(0.25 * np.abs(self._qt)) / (qmax+0.1) # for unreactive sites (strong interaction)
+            k2 = 0.1  # 0.25 * k2
             # @TEMP
-            k1 = 0.00
-            k2 = 0.00
+            # k1 = 0.00
+            # k2 = 0.00
 
             self._bond_k = self._bond_k0 * k1
             special_index = np.where(self._bond_special_indicator==1)[0]
@@ -577,16 +615,16 @@ class NeFFCalculator(Calculator):
 
             ## 3. update topology for current reactive & unreactive sites
             topo_energy = 0.0
-            with Timing("neff update restraint topology"):
-                topo_energy = self.update_restraint_topology(iterator.temperature_K, custom_loggor)
+            with Timing("NeFFOnly update restraint topology"):
+                topo_energy = self.update_restraint_topology(atoms, iterator.temperature_K, custom_loggor)
             
             if only_initialize:
                 return
             
             neq_energy = 0.0
-            with Timing("neff calculate potentials again"):
-                xyz = self._eqcalc.atoms.get_positions()
-                box = np.diag(self._eqcalc.atoms.get_cell())
+            with Timing("NeFFOnly calculate potentials again"):
+                xyz = atoms.get_positions()
+                box = np.diag(atoms.get_cell())
                 for _, t in enumerate(self._ne_potentials):
                     #print(t['type'], len(t['lists']))
                     atoms_pos = [xyz[atom_list] for atom_list in t['lists']] # list should be updated in update_restraint
@@ -612,7 +650,7 @@ class NeFFCalculator(Calculator):
 
             custom_loggor.print(f"time: {self._time / units.fs:.6f} fs | qt = {self._qt:.6f} | k1 = {k1:.6f} | k2 = {k2:.6f}")
 
-        with Timing("neff work analysis"):
+        with Timing("NeFFOnly work analysis"):
             # check for energy
             if self._prev_Energy_analysis is None:
                 self._prev_Energy_analysis = self._results['energy']
@@ -662,8 +700,8 @@ class NeFFCalculator(Calculator):
                 self._prev_Energy_analysis = self._results['energy']
                 self._prev_sum_Force_dot_Coords = 0.0 # reset to zero
 
-        with Timing("neff bond statistics"):
-            xyz = self._eqcalc.atoms.get_positions()
+        with Timing("NeFFOnly bond statistics"):
+            xyz = atoms.get_positions()
             box = np.diag(atoms.get_cell())
             cutoff = 2.5
             for i in range(1):
@@ -677,7 +715,7 @@ class NeFFCalculator(Calculator):
                 custom_loggor.print('B index ' + ' '.join([str(k) for k in t['lists'][1]]))
                 custom_loggor.print('C index ' + ' '.join([str(k) for k in t['lists'][2]]))
                 custom_loggor.print('D index ' + ' '.join([str(k) for k in t['lists'][3]]))
-                custom_loggor.print('VMD index '
+                custom_loggor.print('VMD index ' 
                     + ' '.join([str(k) for k in t['lists'][0]])
                     + ' ' + ' '.join([str(k) for k in t['lists'][1]])
                     + ' ' + ' '.join([str(k) for k in t['lists'][2][:lenA]])
@@ -724,22 +762,6 @@ class NeFFCalculator(Calculator):
                     f.write("\n")
                     f.close()
 
-        with Timing("clean temp dir"):
-            try:
-                if isinstance(self._eqcalc.tmp_dir, str):
-                    if os.path.exists(self._eqcalc.tmp_dir):
-                        shutil.rmtree(self._eqcalc.tmp_dir)
-                        os.makedirs(self._eqcalc.tmp_dir)
-                elif isinstance(self._eqcalc.tmp_dir, list):
-                    for tmp_dir in self._eqcalc.tmp_dir:
-                        if os.path.exists(tmp_dir):
-                            shutil.rmtree(tmp_dir)
-                            os.makedirs(tmp_dir)
-            except Exception as e:
-                custom_loggor.print(f"Clean Error: {e}")
-                pass
-
-
 if __name__ == '__main__':
     from rdkit import Chem
     from rdkit.Chem import AllChem
@@ -759,11 +781,11 @@ if __name__ == '__main__':
     # AllChem.EmbedMolecule(mol, AllChem.ETKDG())
     # uff_calc = AllChem.UFFGetMoleculeForceField(mol)
 
-    #data = NeFFCalculator.PARSE_NEFF_FILE('system1.neff')
+    #data = NeFFOnlyCalculator.PARSE_NeFFOnly_FILE('system1.NeFFOnly')
     # pprint(data)
-    neff = NeFFCalculator(
+    NeFFOnly = NeFFOnlyCalculator(
         calc=Calculator(),
-        neff_file='neff.neff',
+        NeFFOnly_file='NeFFOnly.NeFFOnly',
         device='cpu'
     )
 
@@ -771,7 +793,7 @@ if __name__ == '__main__':
         np.random.seed(seed)
         return np.sqrt(2*gamma*temp*dt) * np.random.randn(natom, 3)
 
-    atoms.calc = neff
+    atoms.calc = NeFFOnly
     energy1 = atoms.get_potential_energy()
     force1 = atoms.get_forces()
     # pprint(atoms.calc.results)
@@ -792,4 +814,4 @@ if __name__ == '__main__':
         energy1 = energy2
         force1 = force2
 
-        print(f"work_sum: {np.sum(neff._results['work'])}")
+        print(f"work_sum: {np.sum(NeFFOnly._results['work'])}")
