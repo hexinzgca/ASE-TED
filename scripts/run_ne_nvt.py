@@ -198,7 +198,7 @@ if __name__ == "__main__":
         # LAMMPS RUN
         ase2lammps_dump(atoms, f'{flag}/initial.dump')
         with open(f'{flag}/run.in', 'w') as f:
-            f.write(lammps_input(filename_in='initial.dump', filename_out='final_lmp.dump', ensemble='npt',
+            f.write(lammps_input(filename_in='initial.dump', filename_out='final_lmp.dump', ensemble='nvt',
                 nsamp=1, step=interval))
             f.close()
         try:
@@ -224,7 +224,7 @@ if __name__ == "__main__":
 
     # final run npt:
     with open(f'{flag}/run.in', 'w') as f:
-        f.write(lammps_input_final(filename_in='initial_stage2.dump', filename_out='final_stage2.dump', ensemble='npt',
+        f.write(lammps_input_final(filename_in='initial_stage2.dump', filename_out='final_stage2.dump', ensemble='nvt',
             nsamp=100, step=config["global"]["steps"]))
         f.close()
     try:

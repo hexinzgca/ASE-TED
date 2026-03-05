@@ -3,7 +3,6 @@ from copy import deepcopy
 from pprint import pprint
 import numpy as np
 
-
 def lammps_real_to_ase(energy_lmp, forces_lmp):
     """LAMMPS real单位 转 ASE默认单位（eV, eV/Å）"""
     energy_conversion = 0.0433641
@@ -418,7 +417,7 @@ def parse_lammps_data_to_ase_atoms(data):
     )
 
 
-def ase2lammps_dump(atoms, dump_path, units='real'):
+def ase2lammps_dump(atoms, dump_path):
     """
     将ASE Atoms转换为LAMMPS dump文件（支持real/metal单位）
     参数：
@@ -426,17 +425,14 @@ def ase2lammps_dump(atoms, dump_path, units='real'):
         dump_path: 输出dump文件路径
         units: 单位体系（real/metal），对应LAMMPS的units设置
     """
+    from ase import units
+    
     # 1. 单位转换（关键：ASE默认是metal单位，需转real）
-    # metal: 长度Å, 速度Å/ps; real: 长度Å, 速度Å/fs（1 ps = 1000 fs）
-    unit_convert = {
-        'metal': {'velocity': 1.0},  # 无需转换
-        'real': {'velocity': 0.001}   # Å/ps → Å/fs（除以1000）
-    }
-    convert = unit_convert[units]
+    vel_conv = units.fs  # for real unit
 
     # 2. 原子类型映射（自动识别体系中的元素）
     elements = list(set([atom.number for atom in atoms]))
-    type_map = {num: idx+1 for idx, num in enumerate(elements)}
+    type_map = {'C': 1, 'H': 2, 'O': 3}
 
     # 3. 写入dump文件
     with open(dump_path, 'w', encoding='utf-8') as f:
@@ -461,7 +457,10 @@ def ase2lammps_dump(atoms, dump_path, units='real'):
         
         # 原子属性列（id type x y z 可选vx vy vz）
         has_velocity = hasattr(atoms, 'get_velocities') and atoms.get_velocities() is not None
+        has_mass = hasattr(atoms, 'get_masses') and atoms.get_masses() is not None
         columns = ['id', 'type', 'x', 'y', 'z']
+        if has_mass:
+            columns.append('m')
         if has_velocity:
             columns.extend(['vx', 'vy', 'vz'])
         f.write(f"ITEM: ATOMS {' '.join(columns)}\n")
@@ -470,13 +469,33 @@ def ase2lammps_dump(atoms, dump_path, units='real'):
         velocities = atoms.get_velocities() if has_velocity else np.zeros((n_atoms, 3))
         for atom_idx, (atom, vel) in enumerate(zip(atoms, velocities)):
             aid = atom_idx + 1  # LAMMPS ID从1开始
-            atype = type_map[atom.number]
+            atype = type_map[atom.symbol]
             x, y, z = atom.position  # 长度单位始终是Å（real/metal都兼容）
-            # 速度单位转换
-            vx, vy, vz = vel * convert['velocity']
-            
-            if has_velocity:
-                atom_line = f"{aid} {atype} {x:.6f} {y:.6f} {z:.6f} {vx:.8f} {vy:.8f} {vz:.8f}\n"
+            m = atom.mass
+            # 速度单位转换：real 单位下把 ASE 的 Å/ps 换成 LAMMPS real 的 Å/fs
+            vx, vy, vz = vel * vel_conv
+            if has_mass:
+                atom_line = f"{aid} {atype} {x:.6f} {y:.6f} {z:.6f} {m:.6f}"
             else:
-                atom_line = f"{aid} {atype} {x:.6f} {y:.6f} {z:.6f}\n"
+                atom_line = f"{aid} {atype} {x:.6f} {y:.6f} {z:.6f}"
+            if has_velocity:
+                atom_line += f" {vx:.8f} {vy:.8f} {vz:.8f}\n"
+            else:
+                atom_line += "\n"
             f.write(atom_line)
+
+def lammps2ase_dump(dump_path):
+    from ase.io import read
+    last_atoms = read(dump_path, format='lammps-dump-text', index='-1')
+    def dress_atoms(atoms):
+        type_map = { 1: 'C', 2: 'H', 3: 'O'}
+        mass_map = {'C': 12.01, 'H': 4.032,  'O': 15.999} # 氢原子质量 x 4
+        velocities_old = atoms.get_velocities().copy()
+        for i in range(len(atoms)):
+            if atoms[i].number in type_map:
+                atoms[i].symbol = type_map[atoms[i].number]
+                atoms[i].mass = mass_map[atoms[i].symbol]
+        atoms.set_velocities(velocities_old*1000)
+        return atoms
+    return dress_atoms(last_atoms)
+

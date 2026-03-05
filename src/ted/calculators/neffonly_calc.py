@@ -158,7 +158,9 @@ class NeFFOnlyCalculator(Calculator):
         self._bond_record_file = bond_record_file
         if os.path.exists(self._work_record_file): os.remove(self._work_record_file)
         if os.path.exists(self._bond_record_file): os.remove(self._bond_record_file)
-        self.no_neq = False
+        self.at_mid = False
+        self.after_mid = False
+        self.exchanged = False
 
         # read NeFFOnly potential from NeFFOnly file
         self._NeFFOnly_data = self.PARSE_NeFFOnly_FILE(NeFFOnly_file)
@@ -378,7 +380,12 @@ class NeFFOnlyCalculator(Calculator):
         else:
             print(f'random number = {rand_num} vs exp(-deltaE * beta) = {np.exp(-(energy_new - energy_old) * beta_ev_inv)}')
         
-        if minrc < 2.0 and (energy_new < energy_old or rand_num < np.exp(-(energy_new - energy_old) * beta_ev_inv)):
+        if (self.at_mid and minrc < 3.0) or (
+                minrc < 2.0 and
+                (energy_new < energy_old or
+                rand_num < np.exp(-(energy_new - energy_old) * beta_ev_inv)
+                )
+            ):
             self._bond_old = self._bond_Iinfo[0].copy()
 
             self._bond_Iinfo[0][i], self._bond_Iinfo[0][j] = self._bond_Iinfo[0][j], self._bond_Iinfo[0][i]
@@ -403,6 +410,8 @@ class NeFFOnlyCalculator(Calculator):
                 print(f'energy old = {energy_old}')
                 print(f'energy new = {energy_new}')
                 print(f'delta energy = {energy_new - energy_old}')
+            
+            self.exchanged = True
         else:
             if custom_loggor is not None:
                 custom_loggor.print('Reject exchange by random')
@@ -528,9 +537,9 @@ class NeFFOnlyCalculator(Calculator):
             self.results['energy'] = total_energy
             self.results['forces'] = total_forces
 
-            if self.no_neq: # not for dynamics
-                self.results['energy'] = 0.0
-                self.results['forces'] = np.zeros_like(total_forces)
+            if self.after_mid: # only restrained NEFF
+                self.results['energy'] = copy(total_neq_energy[-1])
+                self.results['forces'] = copy(total_neq_forces[-1])
 
             self._results['energy'] = total_energy
             self._results['forces'] = total_forces
